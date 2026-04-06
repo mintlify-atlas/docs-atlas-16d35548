@@ -1,97 +1,70 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "esp-hal"
+description: "Bare-metal (no_std) Hardware Abstraction Layer for Espressif ESP32 microcontrollers, written in Rust."
 ---
 
-## Setting up
+esp-hal provides safe, idiomatic Rust APIs for programming Espressif ESP32 microcontrollers without an operating system. It supports the full ESP32 family — from the original ESP32 to the latest ESP32-C, H, and S series chips — covering both RISC-V and Xtensa architectures.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up your Rust toolchain and add esp-hal to your project.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and flash your first embedded Rust program in minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Peripheral Drivers" icon="microchip" href="/drivers/gpio">
+    GPIO, SPI, I2C, UART, DMA, timers, and more.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Core Concepts" icon="book" href="/concepts/peripherals">
+    Understand how esp-hal models peripherals, async, and interrupts.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Supported chips
 
-Everything you need to create world-class documentation.
+esp-hal runs on every chip in the ESP32 family:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+| Series | Chips | Architecture |
+|--------|-------|-------------|
+| ESP32 | ESP32 | Xtensa LX6 |
+| ESP32-C | ESP32-C2, C3, C5, C6, C61 | RISC-V |
+| ESP32-H | ESP32-H2 | RISC-V |
+| ESP32-S | ESP32-S2, S3 | Xtensa LX7 |
 
-## Need inspiration?
+## Key features
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Blocking & async APIs" icon="bolt">
+    Every peripheral supports both blocking and async operation modes. Use Embassy for fully async embedded applications.
+  </Card>
+  <Card title="embedded-hal compatible" icon="plug">
+    Implements the `embedded-hal` and `embedded-hal-async` traits, making esp-hal compatible with the wider Rust embedded ecosystem.
+  </Card>
+  <Card title="Type-safe peripherals" icon="shield-check">
+    Peripheral singletons returned from `init()` guarantee exclusive access at compile time, preventing resource conflicts.
+  </Card>
+  <Card title="DMA support" icon="arrow-right-arrow-left">
+    High-throughput transfers for SPI, I2C, UART, I2S, and more — freeing the CPU while data moves in the background.
+  </Card>
+</CardGroup>
+
+## Ecosystem
+
+<CardGroup cols={2}>
+  <Card title="esp-alloc" icon="memory" href="/ecosystem/esp-alloc">
+    Heap allocator for `no_std` programs on ESP32 chips.
+  </Card>
+  <Card title="esp-println" icon="terminal" href="/ecosystem/esp-println">
+    `println!` and logging support over UART, USB-Serial-JTAG, or RTT.
+  </Card>
+  <Card title="esp-radio" icon="wifi" href="/ecosystem/esp-radio">
+    Wi-Fi, Bluetooth, and IEEE 802.15.4 radio stack.
+  </Card>
+  <Card title="esp-storage" icon="hard-drive" href="/ecosystem/esp-storage">
+    Flash storage driver implementing `embedded-storage` traits.
+  </Card>
+</CardGroup>
+
+<Note>
+  esp-hal is in active development. APIs marked `unstable` may change between minor releases. See the [stability policy](/introduction#stability) and [migration guide](/migration/from-1-0-0) for details.
+</Note>

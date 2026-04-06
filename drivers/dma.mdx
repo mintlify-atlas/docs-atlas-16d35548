@@ -1,0 +1,154 @@
+---
+title: "DMA"
+description: "Use DMA for high-throughput peripheral transfers on ESP32 microcontrollers with esp-hal."
+keywords: ["dma", "direct memory access", "esp32", "esp-hal", "embedded rust", "gdma", "pdma"]
+---
+
+<Note>
+DMA support requires the `unstable` feature flag in `Cargo.toml`.
+</Note>
+
+Direct Memory Access (DMA) lets the hardware move data between memory and peripherals without CPU involvement. This frees the CPU to do other work during long transfers and enables sustained throughput that would otherwise saturate a busy-waiting loop.
+
+## DMA controllers
+
+ESP32 and ESP32-S2 use the older PDMA controller, where each DMA channel is tied to a specific peripheral. All newer chips (ESP32-C3, ESP32-S3, ESP32-C6, and so on) use the GDMA controller, which allows any channel to be assigned to any compatible peripheral.
+
+## DMA buffers
+
+DMA requires you to manage two things:
+
+1. **Data buffers** — where the actual bytes live. These **must reside in internal DRAM**. On ESP32-S3 with PSRAM DMA, additional alignment constraints apply.
+2. **Descriptor lists** — linked-list structures that tell the DMA engine where each data chunk is. Descriptors must also be in internal DRAM.
+
+esp-hal provides three buffer wrappers:
+
+| Type | Direction | Description |
+|------|-----------|-------------|
+| `DmaTxBuf` | Memory → Peripheral | Holds data to be sent |
+| `DmaRxBuf` | Peripheral → Memory | Holds data received |
+| `DmaRxTxBuf` | Both | Bidirectional buffer |
+
+### Using the `dma_buffers!` macro
+
+The `dma_buffers!` macro is the easiest way to allocate correctly-placed static buffers and their descriptors:
+
+```rust
+use esp_hal::dma_buffers;
+use esp_hal::dma::{DmaRxBuf, DmaTxBuf};
+
+// Allocate 1024-byte TX and RX data buffers, plus matching descriptor lists
+let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
+    dma_buffers!(1024);
+
+let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
+let dma_tx_buf = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
+```
+
+<Tip>
+Number of descriptors required: `(transfer_size + CHUNK_SIZE - 1) / CHUNK_SIZE`. For transfers up to 4095 bytes you need a single descriptor.
+</Tip>
+
+### Manual buffer allocation
+
+If you prefer to manage the memory yourself, declare static arrays and pass slices:
+
+```rust
+use esp_hal::dma::{DmaDescriptor, DmaRxBuf, DmaTxBuf};
+
+static mut TX_DESC: [DmaDescriptor; 1] = [DmaDescriptor::EMPTY; 1];
+static mut TX_BUF:  [u8; 256] = [0u8; 256];
+
+static mut RX_DESC: [DmaDescriptor; 1] = [DmaDescriptor::EMPTY; 1];
+static mut RX_BUF:  [u8; 256] = [0u8; 256];
+
+// SAFETY: these statics are only accessed through the DMA buffer wrappers
+let dma_tx_buf = unsafe {
+    DmaTxBuf::new(&mut TX_DESC, &mut TX_BUF).unwrap()
+};
+let dma_rx_buf = unsafe {
+    DmaRxBuf::new(&mut RX_DESC, &mut RX_BUF).unwrap()
+};
+```
+
+<Warning>
+DMA buffers and descriptors must be in internal SRAM. Stack-allocated or `const`-initialized data in flash will cause undefined behaviour or a bus fault.
+</Warning>
+
+## DMA with SPI
+
+Attach a DMA channel to an SPI instance using `.with_dma()`:
+
+```rust
+use esp_hal::dma_buffers;
+use esp_hal::dma::{DmaRxBuf, DmaTxBuf};
+use esp_hal::spi::{Mode, master::{Config, Spi}};
+use esp_hal::time::Rate;
+
+let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
+    dma_buffers!(1024);
+
+let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
+let dma_tx_buf = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
+
+let spi = Spi::new(
+    peripherals.SPI2,
+    Config::default()
+        .with_frequency(Rate::from_mhz(40))
+        .with_mode(Mode::_0),
+)?
+.with_sck(peripherals.GPIO6)
+.with_mosi(peripherals.GPIO7)
+.with_miso(peripherals.GPIO2)
+.with_dma(peripherals.DMA_CH0);
+
+// Start a DMA write transfer
+let transfer = spi.write(dma_tx_buf)?;
+
+// ... do other work here while the DMA runs ...
+
+// Block until the transfer completes; recover the SPI and buffer
+let (spi, dma_tx_buf) = transfer.wait();
+```
+
+For a full-duplex DMA transfer:
+
+```rust
+let transfer = spi.transfer(dma_rx_buf, dma_tx_buf)?;
+let (spi, dma_rx_buf, dma_tx_buf) = transfer.wait();
+```
+
+## DMA with other peripherals
+
+DMA channels are also used by I2S and UHCI peripherals. The pattern is the same: construct the buffer, pass a channel to `.with_dma()`, and then initiate a typed transfer object whose `.wait()` returns the channel when done.
+
+## Memory-to-memory DMA (Mem2Mem)
+
+GDMA-capable chips (all chips except ESP32 and ESP32-S2 when using GDMA) can copy memory without involving a real peripheral:
+
+```rust
+use esp_hal::dma::{DmaRxBuf, DmaTxBuf, Mem2Mem};
+use esp_hal::dma_buffers;
+
+let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
+    dma_buffers!(512);
+
+let dma_tx_buf = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
+let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
+
+// Any DMA-eligible peripheral handle is needed as the GDMA
+// pseudo-peripheral "owner" — this is a chip-specific requirement.
+let mem2mem = Mem2Mem::new(peripherals.DMA_CH0, peripherals.SPI2);
+
+let transfer = mem2mem.start_transfer(dma_rx_buf, dma_tx_buf)?;
+let (_, dma_rx_buf, dma_tx_buf) = transfer.wait();
+```
+
+`Mem2Mem` is available on ESP32-S2 (via `DMA_COPY`) and on all GDMA chips.
+
+## Chip availability
+
+| Controller | Chips |
+|-----------|-------|
+| PDMA | ESP32, ESP32-S2 |
+| GDMA | ESP32-C3, ESP32-C6, ESP32-H2, ESP32-S3, ESP32-C5, ESP32-C61 |

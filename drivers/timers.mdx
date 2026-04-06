@@ -1,0 +1,182 @@
+---
+title: "Timers"
+description: "Use hardware timers for delays, periodic events, and time measurement on ESP32 microcontrollers with esp-hal."
+keywords: ["timer", "systimer", "timg", "delay", "esp32", "esp-hal", "embedded rust", "embassy"]
+---
+
+<Note>
+Timer drivers require the `unstable` feature flag in `Cargo.toml`.
+</Note>
+
+esp-hal provides two timer peripherals and a `Delay` helper:
+
+| Type | Peripheral | Availability |
+|------|-----------|--------------|
+| `SystemTimer` | SYSTIMER | C and S series, H2 |
+| `TimerGroup` | TIMG | All chips |
+| `Delay` | Uses `Instant::now()` | All chips |
+
+The high-level `OneShotTimer` and `PeriodicTimer` wrappers work with either hardware peripheral, giving you a single API regardless of which timer you use.
+
+## Delay
+
+The simplest way to block for a fixed time is `Delay`:
+
+```rust
+use esp_hal::delay::Delay;
+
+let delay = Delay::new();
+
+delay.delay_millis(500);
+delay.delay_micros(100);
+```
+
+`Delay` implements `embedded_hal::delay::DelayNs` and requires no peripheral allocation.
+
+## TimerGroup (TIMG)
+
+`TimerGroup` exposes one or two general-purpose timers and a watchdog timer. It is available on every chip.
+
+### One-shot timer
+
+```rust
+use esp_hal::timer::{OneShotTimer, timg::TimerGroup};
+
+let timg0 = TimerGroup::new(peripherals.TIMG0);
+let mut one_shot = OneShotTimer::new(timg0.timer0);
+
+// Block for 500 ms
+one_shot.delay_millis(500);
+```
+
+### Periodic timer
+
+```rust
+use esp_hal::timer::{PeriodicTimer, timg::TimerGroup};
+use esp_hal::time::Duration;
+
+let timg0 = TimerGroup::new(peripherals.TIMG0);
+let mut periodic = PeriodicTimer::new(timg0.timer0);
+
+periodic.start(Duration::from_secs(1));
+loop {
+    periodic.wait(); // blocks until the period elapses
+}
+```
+
+### Low-level timer access
+
+For direct hardware control:
+
+```rust
+use esp_hal::timer::{Timer, timg::TimerGroup};
+use esp_hal::time::Duration;
+
+let timg0 = TimerGroup::new(peripherals.TIMG0);
+let timer0 = timg0.timer0;
+
+// Snapshot the current timestamp
+let now = timer0.now();
+
+// Set a one-shot alarm and wait
+timer0.load_value(Duration::from_millis(100));
+timer0.start();
+while !timer0.is_interrupt_set() {}
+timer0.clear_interrupt();
+```
+
+### Watchdog timer
+
+```rust
+use esp_hal::timer::timg::{MwdtStage, TimerGroup};
+use esp_hal::time::Duration;
+
+let timg0 = TimerGroup::new(peripherals.TIMG0);
+let mut wdt = timg0.wdt;
+
+wdt.set_timeout(MwdtStage::Stage0, Duration::from_millis(5_000));
+wdt.enable();
+
+loop {
+    wdt.feed(); // reset the watchdog
+}
+```
+
+## SystemTimer (SYSTIMER)
+
+`SystemTimer` is a high-resolution timer clocked from the crystal oscillator. It has three alarm channels (`alarm0`, `alarm1`, `alarm2`).
+
+```rust
+use esp_hal::timer::{OneShotTimer, systimer::SystemTimer};
+
+let sysimer = SystemTimer::new(peripherals.SYSTIMER);
+let mut one_shot = OneShotTimer::new(sysimer.alarm0);
+
+one_shot.delay_millis(200);
+```
+
+Use `PeriodicTimer` in the same way as with `TimerGroup`.
+
+## Async timers
+
+Convert a timer to async mode with `into_async()`, then await delays:
+
+```rust
+use esp_hal::timer::{OneShotTimer, timg::TimerGroup};
+
+let timg0 = TimerGroup::new(peripherals.TIMG0);
+let mut one_shot = OneShotTimer::new(timg0.timer0).into_async();
+
+// In an async context:
+one_shot.delay_millis_async(250).await;
+one_shot.delay_micros_async(500).await;
+```
+
+## Using timers with Embassy
+
+Embassy uses `esp-hal`'s `SystemTimer` (or `TimerGroup`) as its time driver. Register it during initialisation:
+
+```rust
+use esp_hal::timer::systimer::SystemTimer;
+use esp_hal_embassy::init;
+
+let systimer = SystemTimer::new(peripherals.SYSTIMER);
+init(systimer.alarm0);
+```
+
+Once registered, you can use `embassy_time::Timer` anywhere in your async tasks:
+
+```rust
+use embassy_time::{Duration, Timer};
+
+#[embassy_executor::task]
+async fn blink_task() {
+    loop {
+        Timer::after(Duration::from_millis(500)).await;
+        // toggle LED
+    }
+}
+```
+
+## Measuring elapsed time with `esp_hal::time`
+
+The `esp_hal::time` module exposes `Instant` and `Duration` for wall-clock measurements:
+
+```rust
+use esp_hal::time::{Duration, Instant};
+
+let start = Instant::now();
+
+// do some work ...
+
+let elapsed: Duration = start.elapsed();
+```
+
+`Instant::now()` reads from the system timer counter and returns a monotonic timestamp.
+
+## Chip availability
+
+| Timer | Chips |
+|-------|-------|
+| TIMG (TimerGroup) | All chips |
+| SYSTIMER (SystemTimer) | ESP32-C2, C3, C5, C6, C61, H2, S3 |

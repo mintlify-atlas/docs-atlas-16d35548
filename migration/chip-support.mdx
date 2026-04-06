@@ -1,0 +1,171 @@
+---
+title: "Chip support"
+description: "Supported ESP32 chips, target triples, and peripheral driver availability in esp-hal."
+keywords: ["chip support", "esp32", "target triple", "peripheral support", "riscv", "xtensa"]
+---
+
+`esp-hal` supports nine ESP32 chips across two CPU architectures. This page lists all supported chips, their Rust target triples, and the current state of each peripheral driver.
+
+<Note>
+  The peripheral support table reflects the state of the **main branch**, not any stable release. Driver maturity varies — check the legend below before depending on a peripheral.
+</Note>
+
+## Supported chips
+
+<CardGroup cols={2}>
+  <Card title="ESP32" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf">
+    **Architecture:** Xtensa LX6 (dual-core)\
+    **Target:** `xtensa-esp32-none-elf`\
+    **Toolchain:** `esp` (Xtensa — not standard Rust)
+  </Card>
+  <Card title="ESP32-S2" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32-s2_datasheet_en.pdf">
+    **Architecture:** Xtensa LX7 (single-core)\
+    **Target:** `xtensa-esp32s2-none-elf`\
+    **Toolchain:** `esp` (Xtensa — not standard Rust)
+  </Card>
+  <Card title="ESP32-S3" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf">
+    **Architecture:** Xtensa LX7 (dual-core)\
+    **Target:** `xtensa-esp32s3-none-elf`\
+    **Toolchain:** `esp` (Xtensa — not standard Rust)
+  </Card>
+  <Card title="ESP32-C2" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp8684_datasheet_en.pdf">
+    **Architecture:** RISC-V (single-core)\
+    **Target:** `riscv32imc-unknown-none-elf`\
+    **Toolchain:** stable Rust
+  </Card>
+  <Card title="ESP32-C3" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf">
+    **Architecture:** RISC-V (single-core)\
+    **Target:** `riscv32imc-unknown-none-elf`\
+    **Toolchain:** stable Rust
+  </Card>
+  <Card title="ESP32-C5" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32-c5_datasheet_en.pdf">
+    **Architecture:** RISC-V (single-core)\
+    **Target:** `riscv32imac-unknown-none-elf`\
+    **Toolchain:** stable Rust
+  </Card>
+  <Card title="ESP32-C6" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32-c6_datasheet_en.pdf">
+    **Architecture:** RISC-V (single-core HP + LP)\
+    **Target:** `riscv32imac-unknown-none-elf`\
+    **Toolchain:** stable Rust
+  </Card>
+  <Card title="ESP32-C61" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32-c61_datasheet_en.pdf">
+    **Architecture:** RISC-V (single-core)\
+    **Target:** `riscv32imac-unknown-none-elf`\
+    **Toolchain:** stable Rust
+  </Card>
+  <Card title="ESP32-H2" icon="microchip" href="https://www.espressif.com/sites/default/files/documentation/esp32-h2_datasheet_en.pdf">
+    **Architecture:** RISC-V (single-core)\
+    **Target:** `riscv32imac-unknown-none-elf`\
+    **Toolchain:** stable Rust
+  </Card>
+</CardGroup>
+
+## Chip features in Cargo.toml
+
+Enable exactly **one** chip feature in your `Cargo.toml`. Enabling more than one is a compile error.
+
+```toml Cargo.toml
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["esp32c6"] }
+```
+
+The available chip feature names are:
+
+| Feature | Chip |
+|---|---|
+| `esp32` | ESP32 |
+| `esp32c2` | ESP32-C2 |
+| `esp32c3` | ESP32-C3 |
+| `esp32c5` | ESP32-C5 |
+| `esp32c6` | ESP32-C6 |
+| `esp32c61` | ESP32-C61 |
+| `esp32h2` | ESP32-H2 |
+| `esp32s2` | ESP32-S2 |
+| `esp32s3` | ESP32-S3 |
+
+## Checking peripheral availability at compile time
+
+Some peripherals are gated behind chip-specific `cfg` flags generated at build time. If you write code that should compile for multiple chips, use conditional compilation to check availability:
+
+```rust
+#[cfg(esp32c6)]
+{
+    // ESP32-C6-only code, e.g. LP I2C
+}
+```
+
+For more granular capability checks (e.g. whether PSRAM is available on the current chip), the build system exposes metadata-derived `cfg` flags — see the `esp-metadata` crate documentation.
+
+## Peripheral support table
+
+The table below shows the driver support level for each chip. Support levels may change as the project evolves.
+
+**Legend:**
+
+| Symbol | Meaning |
+|---|---|
+| ✔️ | Supported — stable, general-purpose driver |
+| ⚒️ | Partial support — functional but incomplete or unstable |
+| ❌ | Not yet supported — hardware is present, driver is planned |
+| _(empty)_ | Not available — peripheral does not exist on this chip |
+
+| Driver | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-S2 | ESP32-S3 |
+| --- |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| ADC | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| AES | ⚒️ | | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| ASSIST_DEBUG | | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | | ⚒️ |
+| Analog Voltage Comparator | | | | ❌ | | | | | |
+| Bit Scrambler | | | | ❌ | | | | | |
+| Bluetooth | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ |
+| Camera interface | ❌ | | | | | | | ❌ | ⚒️ |
+| DAC | ⚒️ | | | | | | | ⚒️ | |
+| Dedicated GPIO | | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| DMA | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| DS | | | ❌ | ❌ | ❌ | | ❌ | ❌ | ❌ |
+| ECC | | ⚒️ | | ⚒️ | ⚒️ | | ⚒️ | | |
+| Ethernet | ❌ | | | | | | | | |
+| ETM | | | | ❌ | ⚒️ | | ⚒️ | | |
+| GPIO | ✔️ | ✔️ | ✔️ | ⚒️ | ✔️ | ⚒️ | ✔️ | ✔️ | ✔️ |
+| HMAC | | | ⚒️ | ❌ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| I2C master | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ |
+| I2C slave | ❌ | | ❌ | ❌ | ❌ | | ❌ | ❌ | ❌ |
+| I2S | ⚒️ | | ⚒️ | ❌ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| IEEE 802.15.4 | | | | ⚒️ | ⚒️ | | ⚒️ | | |
+| Interrupts | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ |
+| IOMUX | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| Key Manager | | | | ❌ | | | | | |
+| LEDC | ⚒️ | ⚒️ | ⚒️ | ❌ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| LP I2C master | | | | ⚒️ | ⚒️ | | | | |
+| LP UART | | | | ❌ | ⚒️ | | | | |
+| MCPWM | ⚒️ | | | ❌ | ⚒️ | | ⚒️ | | ⚒️ |
+| PARL_IO | | | | ⚒️ | ⚒️ | | ⚒️ | | |
+| PCNT | ⚒️ | | | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| PHY | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| PSRAM | ⚒️ | | | ❌ | | ❌ | | ⚒️ | ⚒️ |
+| RGB display | ⚒️ | | | | | | | ❌ | ⚒️ |
+| RMT | ⚒️ | | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| RNG | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ |
+| RSA | ⚒️ | | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| RTC timekeeping | ⚒️ | ⚒️ | ⚒️ | ❌ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| SDIO host | ⚒️ | | | | | | | | ⚒️ |
+| SDIO slave | ⚒️ | | | ❌ | ⚒️ | | | | |
+| SHA | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| Light/deep sleep | ⚒️ | ⚒️ | ⚒️ | ❌ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| SPI master | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ |
+| SPI slave | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ |
+| SYSTIMER | | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ |
+| Temperature sensor | ⚒️ | ⚒️ | ⚒️ | ❌ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| Timers | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ |
+| Touch | ⚒️ | | | ❌ | | | | ❌ | ❌ |
+| TWAI / CAN / CANFD | ⚒️ | | ⚒️ | ❌ | ⚒️ | | ⚒️ | ⚒️ | ⚒️ |
+| UART | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ | ✔️ |
+| UHCI | ❌ | | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ❌ | ⚒️ |
+| ULP (FSM) | ⚒️ | | | | | | | ⚒️ | ⚒️ |
+| ULP (RISC-V) | | | | ❌ | ⚒️ | | | ⚒️ | ⚒️ |
+| USB OTG FS | | | | | | | | ⚒️ | ⚒️ |
+| USB Serial/JTAG | | | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | | ⚒️ |
+| WiFi | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️ | | ⚒️ | ⚒️ |
+
+<Tip>
+  Cells marked ❌ that link to a GitHub issue in the source README indicate that the peripheral is tracked for implementation. Check the [esp-hal issue tracker](https://github.com/esp-rs/esp-hal/issues) to follow progress or contribute.
+</Tip>

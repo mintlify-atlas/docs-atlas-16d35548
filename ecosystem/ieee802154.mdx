@@ -1,0 +1,202 @@
+---
+title: "IEEE 802.15.4"
+description: "Low-power, low-rate wireless mesh networking protocol used by Zigbee and Thread/Matter on ESP32-C5, C6, and H2."
+---
+
+IEEE 802.15.4 is a low-power, low-rate wireless standard that defines the physical and MAC layers used by higher-level protocols like Zigbee, Thread, and Matter. `esp-radio` includes a low-level IEEE 802.15.4 driver for chips with the 802.15.4 radio.
+
+<Warning>
+  The IEEE 802.15.4 driver is considered **unstable** in `esp-radio` and is under active development. APIs may change without notice between releases. You must enable the `unstable` feature to use it.
+</Warning>
+
+## Supported chips
+
+| Chip      | IEEE 802.15.4 |
+|-----------|:-------------:|
+| ESP32-C5  |       ✓       |
+| ESP32-C6  |       ✓       |
+| ESP32-H2  |       ✓       |
+| All others|       —       |
+
+Note: on ESP32-C5 and ESP32-C6, the IEEE 802.15.4 radio cannot be used simultaneously with Wi-Fi.
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="Zigbee" icon="network-wired">
+    Build Zigbee coordinator, router, or end-device firmware using the 802.15.4 MAC layer directly or with a Zigbee stack on top.
+  </Card>
+  <Card title="Thread / Matter" icon="house">
+    Thread is an IP-based mesh protocol built on 802.15.4. It underlies Matter home automation. Use OpenThread for a full Thread stack.
+  </Card>
+  <Card title="Custom mesh protocols" icon="sitemap">
+    Build your own low-power mesh network with custom addressing and routing, well-suited for sensor grids or industrial monitoring.
+  </Card>
+  <Card title="802.15.4 testing and sniffing" icon="bug">
+    Use promiscuous mode to capture all frames on a channel — useful for protocol debugging and interoperability testing.
+  </Card>
+</CardGroup>
+
+## Adding to your project
+
+```toml
+[dependencies]
+esp-radio = { version = "0.17.0", features = [
+    "esp32c6",
+    "ieee802154",
+    "unstable",
+] }
+esp-hal   = { version = "1.0", features = ["esp32c6", "unstable"] }
+esp-alloc = { version = "0.9.0", features = ["esp32c6"] }
+
+# The ieee802154 crate provides frame types
+ieee802154 = "0.6"
+```
+
+## Transmitting a frame
+
+<Steps>
+  <Step title="Initialize the driver">
+    ```rust
+    use esp_alloc as _;
+    use esp_backtrace as _;
+    use esp_radio::ieee802154::{Config, Frame, Ieee802154};
+
+    fn main() {
+        let peripherals = esp_hal::init(esp_hal::Config::default());
+
+        esp_alloc::heap_allocator!(size: 24 * 1024);
+
+        let mut radio = Ieee802154::new(peripherals.IEEE802154);
+    ```
+  </Step>
+
+  <Step title="Configure the radio">
+    Set the channel, PAN ID, and short address. Channels 11–26 are in the 2.4 GHz band (used globally). Channel 15 is a common starting point.
+
+    ```rust
+    use esp_radio::ieee802154::Config;
+
+    radio.set_config(Config {
+        channel: 15,
+        promiscuous: false,
+        pan_id: Some(0x4242),
+        short_addr: Some(0x2323),
+        ..Default::default()
+    });
+    ```
+  </Step>
+
+  <Step title="Build and transmit a frame">
+    Use the `ieee802154` crate for frame construction:
+
+    ```rust
+    use ieee802154::mac::{
+        Address, FrameContent, FrameType, FrameVersion,
+        Header, PanId, ShortAddress,
+    };
+    use esp_radio::ieee802154::Frame;
+
+    let frame = Frame {
+        header: Header {
+            frame_type: FrameType::Data,
+            frame_pending: false,
+            ack_request: false,
+            pan_id_compress: false,
+            seq_no_suppress: false,
+            ie_present: false,
+            version: FrameVersion::Ieee802154_2003,
+            seq: seq_number,
+            destination: Some(Address::Short(
+                PanId(0xffff),          // broadcast PAN
+                ShortAddress(0xffff),   // broadcast address
+            )),
+            source: None,
+            auxiliary_security_header: None,
+        },
+        content: FrameContent::Data,
+        payload: b"Hello World".to_vec(),
+        footer: [0u8; 2],
+    };
+
+    radio.transmit(&frame, /* wait_for_ack = */ true).ok();
+    ```
+  </Step>
+</Steps>
+
+## Receiving frames
+
+```rust
+use esp_radio::ieee802154::{Config, Ieee802154};
+
+let mut radio = Ieee802154::new(peripherals.IEEE802154);
+
+radio.set_config(Config {
+    channel: 15,
+    promiscuous: false,
+    rx_when_idle: true,
+    auto_ack_rx: true,  // automatically ACK unicast frames
+    auto_ack_tx: true,  // wait for ACK on transmitted frames
+    pan_id: Some(0x4242),
+    short_addr: Some(0x2323),
+    ..Default::default()
+});
+
+// Start listening
+radio.start_receive();
+
+loop {
+    if let Some(frame) = radio.received() {
+        println!("Received frame: {:?}", frame);
+    }
+}
+```
+
+## Promiscuous (sniffer) mode
+
+Enable `promiscuous: true` to receive all frames on the channel regardless of PAN ID or destination address:
+
+```rust
+radio.set_config(Config {
+    channel: 15,
+    promiscuous: true,
+    rx_when_idle: true,
+    ..Default::default()
+});
+
+radio.start_receive();
+
+loop {
+    if let Some(frame) = radio.received() {
+        // All frames on channel 15, including frames for other networks
+        println!("{:?}", frame);
+    }
+}
+```
+
+## Thread / OpenThread integration
+
+Thread is a full IPv6-based mesh networking protocol built on IEEE 802.15.4. Integrating OpenThread with `esp-radio` is possible but requires significant additional work — OpenThread is a large C library with its own platform abstraction layer.
+
+For home automation using Matter, Thread is the recommended transport. Espressif's official Thread support is currently mature in ESP-IDF. Bare-metal Thread support via `esp-radio` is an active area of development in the esp-rs community.
+
+## Configuration reference
+
+The `Config` struct has the following fields:
+
+| Field            | Type            | Description                                              |
+|------------------|-----------------|----------------------------------------------------------|
+| `channel`        | `u8`            | 802.15.4 channel number (11–26 for 2.4 GHz)             |
+| `promiscuous`    | `bool`          | Receive all frames regardless of destination             |
+| `rx_when_idle`   | `bool`          | Keep the receiver on when not transmitting               |
+| `auto_ack_rx`    | `bool`          | Automatically send ACK for received unicast frames       |
+| `auto_ack_tx`    | `bool`          | Wait for ACK after transmitting a frame                  |
+| `pan_id`         | `Option<u16>`   | PAN identifier (16-bit)                                  |
+| `short_addr`     | `Option<u16>`   | Short (16-bit) source address                            |
+
+## Cargo feature flags
+
+| Feature       | Description                                             |
+|---------------|---------------------------------------------------------|
+| `ieee802154`  | Enable the IEEE 802.15.4 driver (requires `unstable`)   |
+| `unstable`    | Enable access to unstable `esp-radio` APIs              |

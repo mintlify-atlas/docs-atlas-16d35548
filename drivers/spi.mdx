@@ -1,0 +1,171 @@
+---
+title: "SPI"
+description: "Use the SPI master and slave peripherals on ESP32 microcontrollers with esp-hal."
+keywords: ["spi", "serial peripheral interface", "esp32", "esp-hal", "dma", "embedded rust"]
+---
+
+The SPI peripheral supports full-duplex and half-duplex communication in both master and slave modes. SPI master is stable and available on all supported chips.
+
+## Cargo.toml
+
+```toml
+[dependencies]
+esp-hal = { version = "...", features = ["esp32c3"] }  # replace with your chip
+embedded-hal = "1"
+```
+
+## SPI modes
+
+SPI uses four modes defined by clock polarity (CPOL) and clock phase (CPHA):
+
+| Mode | CPOL | CPHA | Clock idle | Sample edge |
+|------|------|------|------------|-------------|
+| `Mode::_0` | 0 | 0 | Low | Rising |
+| `Mode::_1` | 0 | 1 | Low | Falling |
+| `Mode::_2` | 1 | 0 | High | Falling |
+| `Mode::_3` | 1 | 1 | High | Rising |
+
+Most devices use `Mode::_0`. Consult the device datasheet to determine the correct mode.
+
+## SPI master
+
+<Steps>
+  <Step title="Import types">
+    ```rust
+    use esp_hal::spi::{
+        Mode,
+        master::{Config, Spi},
+    };
+    use esp_hal::time::Rate;
+    ```
+  </Step>
+  <Step title="Create the SPI instance">
+    ```rust
+    let mut spi = Spi::new(
+        peripherals.SPI2,
+        Config::default()
+            .with_frequency(Rate::from_mhz(10))
+            .with_mode(Mode::_0),
+    )?
+    .with_sck(peripherals.GPIO6)
+    .with_mosi(peripherals.GPIO7)
+    .with_miso(peripherals.GPIO2)
+    .with_cs(peripherals.GPIO10);
+    ```
+    Pin assignment is done with builder methods. You can omit any pin you do not need (e.g. `.with_cs(NoPin)` or simply leave it out).
+  </Step>
+  <Step title="Transfer data">
+    ```rust
+    use embedded_hal::spi::SpiBus;
+
+    let mut rx_buf = [0u8; 4];
+    let tx_buf = [0x01, 0x02, 0x03, 0x04];
+
+    // Write only
+    spi.write(&tx_buf)?;
+
+    // Read only
+    spi.read(&mut rx_buf)?;
+
+    // Full-duplex: simultaneous write and read
+    spi.transfer(&mut rx_buf, &tx_buf)?;
+
+    // In-place transfer: tx and rx share the same buffer
+    spi.transfer_in_place(&mut rx_buf)?;
+
+    // Flush any pending data
+    spi.flush()?;
+    ```
+  </Step>
+</Steps>
+
+## SPI configuration options
+
+The `Config` struct has a builder-lite API:
+
+```rust
+let config = Config::default()
+    .with_frequency(Rate::from_khz(400))
+    .with_mode(Mode::_3);
+```
+
+You can update the configuration at runtime with `spi.apply_config(&config)?`.
+
+## Async SPI
+
+Convert to async mode and use the async trait methods:
+
+```rust
+use embedded_hal_async::spi::SpiBus;
+
+let mut spi = spi.into_async();
+
+let mut buffer = [0u8; 8];
+spi.transfer_in_place_async(&mut buffer).await?;
+spi.flush_async().await?;
+```
+
+Call `spi.into_blocking()` to revert to blocking mode.
+
+## SPI with DMA
+
+<Note>
+DMA support requires the `unstable` feature flag.
+</Note>
+
+For high-throughput transfers, attach a DMA channel to the SPI peripheral. The `dma_buffers!` macro allocates the descriptor and data buffers in a single step:
+
+```rust
+use esp_hal::dma_buffers;
+use esp_hal::spi::{Mode, master::{Config, Spi}};
+use esp_hal::time::Rate;
+
+// Allocate 1 KB TX and RX buffers plus their DMA descriptors
+let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
+    dma_buffers!(1024);
+
+let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
+let dma_tx_buf = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
+
+let spi = Spi::new(
+    peripherals.SPI2,
+    Config::default()
+        .with_frequency(Rate::from_mhz(40))
+        .with_mode(Mode::_0),
+)?
+.with_sck(peripherals.GPIO6)
+.with_mosi(peripherals.GPIO7)
+.with_miso(peripherals.GPIO2)
+.with_dma(peripherals.DMA_CH0);
+
+// Start a DMA-backed write
+let transfer = spi.write(dma_tx_buf)?;
+
+// Wait for the transfer to complete and recover the buffers
+let (spi, dma_tx_buf) = transfer.wait();
+```
+
+See [DMA](/drivers/dma) for details on buffer sizing and descriptor requirements.
+
+## SPI slave
+
+<Note>
+SPI slave mode requires the `unstable` feature flag.
+</Note>
+
+```rust
+use esp_hal::spi::slave::Spi as SpiSlave;
+
+let spi_slave = SpiSlave::new(
+    peripherals.SPI2,
+    Mode::_0,
+)
+.with_sck(peripherals.GPIO6)
+.with_mosi(peripherals.GPIO7)
+.with_miso(peripherals.GPIO2)
+.with_cs(peripherals.GPIO10);
+```
+
+## Chip availability
+
+SPI master (`spi::master`) is stable and available on all supported chips. At least SPI2 is present on every chip; ESP32 and ESP32-S2 also expose SPI3. SPI slave (`spi::slave`) is available on chips that have a dedicated slave SPI controller and requires the `unstable` feature.

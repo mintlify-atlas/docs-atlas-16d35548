@@ -1,0 +1,125 @@
+---
+title: "Introduction"
+description: "Bare-metal Rust hardware abstraction layer for Espressif ESP32 microcontrollers"
+---
+
+## What is esp-hal?
+
+`esp-hal` is a bare-metal (`no_std`) Hardware Abstraction Layer (HAL) for Espressif's ESP32 family of microcontrollers. It runs directly on hardware with no operating system — no Linux, no FreeRTOS, no RTOS of any kind — making it suitable for applications that require deterministic timing, minimal memory footprint, or full control over hardware resources.
+
+Because it is `no_std`, `esp-hal` does not use Rust's standard library. Instead, it relies on `core` and implements blocking and async APIs that integrate with the broader embedded Rust ecosystem via the [`embedded-hal`](https://github.com/rust-embedded/embedded-hal) traits.
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up your toolchain and add esp-hal to your project.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Generate a project and run your first blinky in minutes.
+  </Card>
+  <Card title="Rust on ESP Book" icon="book" href="https://docs.espressif.com/projects/rust/book/">
+    The official guide to Rust development on Espressif chips.
+  </Card>
+  <Card title="The Embedded Rust Book" icon="microchip" href="https://docs.rust-embedded.org/book/">
+    Learn about bare-metal Rust development concepts.
+  </Card>
+</CardGroup>
+
+## Supported chips
+
+`esp-hal` supports the full range of ESP32 series microcontrollers. Xtensa-based chips require a custom Rust toolchain (installed via `espup`), while RISC-V-based chips work with the standard Rust stable toolchain.
+
+| Chip       | Architecture | Rust target                      |
+| :--------- | :----------: | :------------------------------- |
+| ESP32      | Xtensa LX6   | `xtensa-esp32-none-elf`          |
+| ESP32-S2   | Xtensa LX7   | `xtensa-esp32s2-none-elf`        |
+| ESP32-S3   | Xtensa LX7   | `xtensa-esp32s3-none-elf`        |
+| ESP32-C2   | RISC-V RV32IMC | `riscv32imc-unknown-none-elf`  |
+| ESP32-C3   | RISC-V RV32IMC | `riscv32imc-unknown-none-elf`  |
+| ESP32-C5   | RISC-V RV32IMAC | `riscv32imac-unknown-none-elf` |
+| ESP32-C6   | RISC-V RV32IMAC | `riscv32imac-unknown-none-elf` |
+| ESP32-C61  | RISC-V RV32IMAC | `riscv32imac-unknown-none-elf` |
+| ESP32-H2   | RISC-V RV32IMAC | `riscv32imac-unknown-none-elf` |
+
+## Peripheral support
+
+The table below shows the current driver support across chips. Support levels vary: some drivers are fully stable, others are partial, and some are not yet implemented.
+
+| Driver                    | ESP32 | C2 | C3 | C5 | C6 | C61 | H2 | S2 | S3 |
+| :------------------------ | :---: | :-: | :-: | :-: | :-: | :--: | :-: | :-: | :-: |
+| GPIO                      | ✔️   | ✔️ | ✔️ | ⚒️ | ✔️ | ⚒️  | ✔️ | ✔️ | ✔️ |
+| I2C master                | ✔️   | ✔️ | ✔️ | ✔️ | ✔️ | ✔️  | ✔️ | ✔️ | ✔️ |
+| SPI master                | ✔️   | ✔️ | ✔️ | ✔️ | ✔️ | ✔️  | ✔️ | ✔️ | ✔️ |
+| UART                      | ✔️   | ✔️ | ✔️ | ✔️ | ✔️ | ✔️  | ✔️ | ✔️ | ✔️ |
+| ADC                       | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| AES                       | ⚒️   |    | ⚒️ | ⚒️ | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| Bluetooth                 | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️  | ⚒️ |    | ⚒️ |
+| DAC                       | ⚒️   |    |    |    |    |     |    | ⚒️ |    |
+| DMA                       | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| I2S                       | ⚒️   |    | ⚒️ |    | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| LEDC                      | ⚒️   | ⚒️ | ⚒️ |    | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| MCPWM                     | ⚒️   |    |    |    | ⚒️ |     | ⚒️ |    | ⚒️ |
+| PCNT                      | ⚒️   |    |    | ⚒️ | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| RMT                       | ⚒️   |    | ⚒️ | ⚒️ | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| RNG                       | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️  | ⚒️ | ⚒️ | ⚒️ |
+| RSA                       | ⚒️   |    | ⚒️ | ⚒️ | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| SHA                       | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| SPI slave                 | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️  | ⚒️ | ⚒️ | ⚒️ |
+| Timers                    | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️  | ⚒️ | ⚒️ | ⚒️ |
+| TWAI / CAN                | ⚒️   |    | ⚒️ |    | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| USB OTG FS                |       |    |    |    |    |     |    | ⚒️ | ⚒️ |
+| WIFI                      | ⚒️   | ⚒️ | ⚒️ | ⚒️ | ⚒️ | ⚒️  |    | ⚒️ | ⚒️ |
+| Light/deep sleep          | ⚒️   | ⚒️ | ⚒️ |    | ⚒️ |     | ⚒️ | ⚒️ | ⚒️ |
+| PSRAM                     | ⚒️   |    |    |    |    |     |    | ⚒️ | ⚒️ |
+
+**Legend:** ✔️ Supported &nbsp; ⚒️ Partial support &nbsp; ❌ Not supported &nbsp; _(empty)_ Not available on chip
+
+For the full peripheral support table including all drivers and issue links, see the [esp-hal README on GitHub](https://github.com/esp-rs/esp-hal/tree/main/esp-hal#peripheral-support).
+
+## Stable vs unstable APIs
+
+`esp-hal` divides its public API into two tiers: **stable** and **unstable**.
+
+The stable API is covered by semantic versioning guarantees. Breaking changes to stable APIs will only happen in major version releases. Most common peripherals — GPIO, I2C, SPI, UART — have stable APIs.
+
+The unstable API contains drivers and features that are still under active development. They may have incomplete implementations, known bugs, or be subject to breaking changes in minor releases. Unstable APIs are **disabled by default** and must be explicitly opted into via a Cargo feature flag.
+
+<Note>
+  Library crates that depend on `esp-hal` should **never** enable the `unstable`
+  feature. Instead, declare your dependency on unstable APIs using the
+  `requires-unstable` feature. This gives clearer error messages to downstream
+  users who haven't enabled `unstable` in their application. Only the final
+  firmware binary crate should enable `unstable`.
+</Note>
+
+To enable unstable APIs in your firmware project:
+
+```toml Cargo.toml
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
+```
+
+APIs marked as unstable are annotated in the documentation and will emit a compiler warning when used without the `unstable` feature enabled.
+
+## Support policy
+
+All active development happens on the `main` branch. Bug fixes are backported only to the **latest** minor release in a given major version series. For example, patches are applied to `1.1.x` until `1.2.0` is released, at which point only `1.2.x` receives backports.
+
+For **stable API** users, the standard `"~1.0"` Cargo version specifier is safe — patch releases will not introduce breaking changes.
+
+For **unstable API** users, minor releases _may_ introduce breaking changes to unstable APIs. To protect your project from unexpected breakage when running `cargo update`, pin your dependency to a specific minor version using the `~` (tilde) operator:
+
+```toml Cargo.toml
+[dependencies]
+esp-hal = { version = "~1.1", features = ["esp32c6", "unstable"] }
+```
+
+The [`~` tilde requirement](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#tilde-requirements) allows patch-level updates but prevents automatic upgrades to the next minor version.
+
+## Resources
+
+- [The Rust on ESP Book](https://docs.espressif.com/projects/rust/book/) — The official end-to-end guide for Rust on Espressif chips
+- [Embedded Rust (`no_std`) on Espressif](https://docs.espressif.com/projects/rust/no_std-training/) — A hands-on training with worked examples
+- [The Embedded Rust Book](https://docs.rust-embedded.org/book/) — Core concepts for embedded Rust development
+- [The Embedonomicon](https://docs.rust-embedded.org/embedonomicon/) — Deep dive into the lowest levels of embedded Rust
+- [The Rust Programming Language](https://doc.rust-lang.org/book/) — The official Rust book
+- [esp-hal examples on GitHub](https://github.com/esp-rs/esp-hal/tree/main/examples) — A large collection of runnable examples for every peripheral

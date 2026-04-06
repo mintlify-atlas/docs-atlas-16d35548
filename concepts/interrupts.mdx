@@ -1,0 +1,174 @@
+---
+title: "Interrupts"
+description: "How interrupt handling works in esp-hal, including the handler attribute, priorities, and software interrupts."
+---
+
+Peripheral interrupt requests in esp-hal are not handled by the CPU directly. They pass through an **interrupt matrix** that routes each peripheral interrupt to a CPU interrupt line. esp-hal sets up vectored interrupt handlers at initialisation time; the vectored dispatcher calls the appropriate registered handler for each pending interrupt.
+
+## How driver interrupts work
+
+Most driver APIs manage interrupts for you. In async mode the driver installs internal interrupt handlers automatically when you call `.into_async()`. In blocking mode many drivers expose `set_interrupt_handler()`, `listen()`, and `unlisten()` methods to control which events trigger a callback and at what priority.
+
+For the common case — writing application code that uses a driver — you do not need to interact with the interrupt system directly. The driver handles it.
+
+## Defining a handler with `#[handler]`
+
+<Warning>
+  The `#[handler]` attribute macro is part of the `unstable` API. It requires
+  the `unstable` feature to be enabled and may change in future releases.
+</Warning>
+
+When you do need a custom interrupt handler — for example, a GPIO pin wakeup — you annotate the function with `#[esp_hal::handler]`:
+
+```rust
+use esp_hal::{handler, interrupt::{self, Priority}, peripherals::Interrupt};
+
+#[handler]
+fn gpio_handler() {
+    // Acknowledge and handle the GPIO interrupt here.
+}
+```
+
+The `#[handler]` macro ensures the function has the correct calling convention (`extern "C"`) and is placed in the right memory region for fast execution.
+
+## Binding and enabling an interrupt
+
+After defining a handler, use the peripheral singleton's generated bind/enable methods, or the lower-level `interrupt::bind_handler` and `interrupt::enable` functions:
+
+```rust
+use esp_hal::{
+    handler,
+    interrupt::{self, InterruptHandler, Priority},
+    peripherals::Interrupt,
+};
+
+#[handler]
+fn gpio_handler() {
+    // handle interrupt
+}
+
+// Bind the handler and enable at Priority1.
+interrupt::bind_handler(
+    Interrupt::GPIO,
+    InterruptHandler::new(gpio_handler, Priority::Priority1),
+);
+interrupt::enable(Interrupt::GPIO, Priority::Priority1);
+```
+
+Alternatively, each peripheral singleton exposes generated helper methods:
+
+```rust
+// Using the peripheral singleton's generated helpers (if available):
+peripherals.GPIO.bind_gpio_interrupt(InterruptHandler::new(gpio_handler, Priority::Priority1));
+peripherals.GPIO.enable_gpio_interrupt(Priority::Priority1);
+```
+
+## Interrupt priorities
+
+A higher numeric priority allows an interrupt handler to preempt code running at a lower level. The exact number of available priority levels differs between architectures:
+
+<Tabs>
+  <Tab title="RISC-V (C2, C3, C5, C6, C61, H2)">
+    RISC-V chips expose **up to 7 priority levels** (`Priority1` through
+    `Priority7`) depending on the interrupt controller in use:
+
+    - `riscv_basic`: levels 1–1 (single priority)
+    - `plic` / `clic`: levels 1–7
+
+    `Priority::min()` is always `Priority1`. `Priority::max()` resolves at
+    compile time to the highest level available for the specific interrupt
+    controller on your chip.
+
+    ```rust
+    use esp_hal::interrupt::Priority;
+
+    interrupt::enable(Interrupt::UART0, Priority::Priority1);
+    interrupt::enable(Interrupt::GPIO,  Priority::max());
+    ```
+  </Tab>
+  <Tab title="Xtensa (ESP32, S2, S3)">
+    Xtensa chips currently expose **three user-accessible priority levels**
+    through esp-hal:
+
+    | Variant | Level |
+    |---------|-------|
+    | `Priority::Priority1` | 1 (lowest) |
+    | `Priority::Priority2` | 2 |
+    | `Priority::Priority3` | 3 (highest user-accessible) |
+
+    Levels 4–7 exist in hardware but require assembly-written handlers; they
+    are not exposed through the standard `Priority` enum.
+
+    ```rust
+    use esp_hal::interrupt::Priority;
+
+    interrupt::enable(Interrupt::GPIO, Priority::Priority1);
+    ```
+  </Tab>
+</Tabs>
+
+## Disabling an interrupt
+
+```rust
+use esp_hal::{interrupt, system::Cpu};
+
+// Disable on the current core only.
+interrupt::disable(Cpu::current(), Interrupt::GPIO);
+```
+
+## Software interrupts
+
+<Note>
+  Software interrupts are part of the `unstable` API. Enable the `unstable`
+  feature to use `SoftwareInterruptControl`.
+</Note>
+
+ESP chips support triggering interrupts from software. This is useful for deferred work or cross-core signalling on dual-core chips. Access software interrupts through `SoftwareInterruptControl`:
+
+```rust
+use core::cell::RefCell;
+use critical_section::Mutex;
+use esp_hal::{
+    handler,
+    interrupt::{InterruptHandler, Priority},
+    interrupt::software::{SoftwareInterrupt, SoftwareInterruptControl},
+};
+
+static SWINT0: Mutex<RefCell<Option<SoftwareInterrupt<0>>>> =
+    Mutex::new(RefCell::new(None));
+
+#[handler]
+fn swint0_handler() {
+    critical_section::with(|cs| {
+        if let Some(sw) = SWINT0.borrow_ref(cs).as_ref() {
+            sw.reset(); // Acknowledge the interrupt.
+        }
+    });
+}
+
+// In main:
+let sw_ints = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+let mut int0 = sw_ints.software_interrupt0;
+
+critical_section::with(|cs| {
+    int0.set_interrupt_handler(InterruptHandler::new(swint0_handler, Priority::Priority1));
+    SWINT0.borrow_ref_mut(cs).replace(int0);
+});
+
+// Trigger the interrupt from anywhere:
+critical_section::with(|cs| {
+    if let Some(sw) = SWINT0.borrow_ref(cs).as_ref() {
+        sw.raise();
+    }
+});
+```
+
+`SoftwareInterrupt::raise()` triggers the interrupt, and `SoftwareInterrupt::reset()` clears the pending request. On multi-core chips, software interrupts are also used internally by esp-hal for cross-core communication.
+
+## Interrupt nesting
+
+The vectored interrupt dispatcher supports **preemption**: a handler running at a lower priority can be interrupted by a pending request at a higher priority. The highest priority level does not nest to avoid unnecessary overhead.
+
+## Async mode and interrupts
+
+In async mode, calling `.into_async()` on a driver installs internal interrupt handlers and disables any user-defined handlers. Interrupt-related methods such as `set_interrupt_handler`, `listen`, and `unlisten` are not available on async-mode drivers. Call `.into_blocking()` to restore user-accessible interrupt control.

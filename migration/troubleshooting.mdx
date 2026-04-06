@@ -1,0 +1,247 @@
+---
+title: "Troubleshooting"
+description: "Solutions to common problems when using esp-hal for bare-metal Rust on ESP32."
+keywords: ["troubleshooting", "errors", "linker", "toolchain", "xtensa", "unstable", "flashing"]
+---
+
+Common problems and their solutions. If your issue is not listed here, check the [GitHub issues](https://github.com/esp-rs/esp-hal/issues) or ask in the [Matrix chat](https://matrix.to/#/#esp-rs:matrix.org).
+
+<AccordionGroup>
+  <Accordion title="Linker errors at build time">
+    **Symptom:** The build fails with messages like `rust-lld: error: unrecognized emulation: elf32xtensa` or `error: could not find native static library`.
+
+    **Cause:** The wrong Rust target triple is selected, or the target is not installed.
+
+    <Steps>
+      <Step title="Verify your target triple">
+        Check that the target in `.cargo/config.toml` matches your chip:
+
+        ```toml .cargo/config.toml
+        [build]
+        target = "riscv32imac-unknown-none-elf"  # ESP32-C6, C5, H2
+        # target = "riscv32imc-unknown-none-elf"  # ESP32-C2, C3
+        # target = "xtensa-esp32-none-elf"        # ESP32
+        # target = "xtensa-esp32s2-none-elf"      # ESP32-S2
+        # target = "xtensa-esp32s3-none-elf"      # ESP32-S3
+        ```
+
+        See the [chip support](/migration/chip-support) page for the full list of target triples.
+      </Step>
+      <Step title="Install the target (RISC-V chips)">
+        For RISC-V chips you can install the target with standard `rustup`:
+
+        ```bash
+        rustup target add riscv32imac-unknown-none-elf
+        ```
+      </Step>
+      <Step title="Install the Xtensa toolchain (ESP32, S2, S3)">
+        Xtensa targets are not part of standard Rust. Install the `esp` toolchain using `espup`:
+
+        ```bash
+        cargo install espup
+        espup install
+        ```
+
+        After installation, source the generated environment file (or add it to your shell profile):
+
+        ```bash
+        # Linux / macOS
+        . $HOME/export-esp.sh
+        ```
+
+        See the next accordion for more detail on the Xtensa toolchain.
+      </Step>
+    </Steps>
+  </Accordion>
+
+  <Accordion title="Xtensa toolchain required (ESP32, S2, S3)">
+    **Symptom:** Build fails on ESP32, ESP32-S2, or ESP32-S3 with an error about an unknown target or missing Xtensa backend.
+
+    **Cause:** The Xtensa instruction set architecture is not supported by upstream (stable) Rust. You must use the Espressif fork of the Rust compiler, distributed as the `esp` toolchain.
+
+    <Steps>
+      <Step title="Install espup">
+        ```bash
+        cargo install espup
+        espup install
+        ```
+      </Step>
+      <Step title="Activate the toolchain">
+        Source the environment file that `espup` generates:
+
+        ```bash
+        # Linux / macOS
+        . $HOME/export-esp.sh
+        ```
+
+        Add this line to your `.bashrc`, `.zshrc`, or equivalent to make it permanent.
+      </Step>
+      <Step title="Pin the toolchain in your project">
+        Add a `rust-toolchain.toml` file to use the `esp` toolchain automatically:
+
+        ```toml rust-toolchain.toml
+        [toolchain]
+        channel = "esp"
+        ```
+      </Step>
+    </Steps>
+
+    <Note>
+      RISC-V chips (ESP32-C and ESP32-H series) work with standard stable Rust and do not require the `esp` toolchain.
+    </Note>
+  </Accordion>
+
+  <Accordion title="unstable feature required">
+    **Symptom:** A compile error saying a type or function requires the `unstable` feature, or that the API is gated behind `#[cfg(feature = "unstable")]`.
+
+    **Cause:** Many drivers and APIs in `esp-hal` are still under active development and are guarded by the `unstable` feature flag. They are disabled by default and have no semver stability guarantees.
+
+    Enable the feature in your `Cargo.toml`:
+
+    ```toml Cargo.toml
+    [dependencies]
+    esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
+    ```
+
+    <Warning>
+      Never enable the `unstable` feature in a **library crate** that other projects will depend on. Instead, enable `requires-unstable` to signal that your library uses unstable APIs, and let the end user's binary crate opt in:
+
+      ```toml Cargo.toml
+      # In a library crate
+      [dependencies]
+      esp-hal = { version = "1.0.0", features = ["requires-unstable"] }
+      ```
+    </Warning>
+
+    If you want to stay on unstable APIs without unexpected breakage, pin to an exact version:
+
+    ```toml Cargo.toml
+    [dependencies]
+    esp-hal = { version = "=1.0.0", features = ["esp32c6", "unstable"] }
+    ```
+  </Accordion>
+
+  <Accordion title="Multiple chip features enabled">
+    **Symptom:** Compilation fails with an error about conflicting features or multiple chip targets selected.
+
+    **Cause:** `esp-hal` requires **exactly one** chip feature. Enabling two or more is not supported and will produce a compile error.
+
+    Check your `Cargo.toml` and any transitive dependencies to ensure only one of the following features is active:
+
+    ```toml Cargo.toml
+    # Correct — only one chip feature
+    [dependencies]
+    esp-hal = { version = "1.0.0", features = ["esp32c6"] }
+    ```
+
+    If a dependency also specifies a chip feature, either configure it via feature forwarding or open an issue with the dependency's maintainer.
+  </Accordion>
+
+  <Accordion title="No chip feature enabled">
+    **Symptom:** Compilation fails immediately with an error saying no chip was selected or that a required symbol is missing.
+
+    **Cause:** No chip feature is enabled. `esp-hal` cannot know which hardware to target without one.
+
+    Add the appropriate chip feature to your `Cargo.toml`:
+
+    ```toml Cargo.toml
+    [dependencies]
+    esp-hal = { version = "1.0.0", features = ["esp32c3"] }
+    ```
+
+    See the [chip support](/migration/chip-support) page for all available chip feature names.
+  </Accordion>
+
+  <Accordion title="Flashing fails">
+    **Symptom:** `cargo run` or `espflash` exits with a connection error, permission denied, or timeout.
+
+    Common causes and fixes:
+
+    **Wrong port or permission denied**
+
+    Pass the port explicitly:
+
+    ```bash
+    espflash flash --port /dev/ttyUSB0 target/riscv32imac-unknown-none-elf/release/my-app
+    ```
+
+    On Linux, add your user to the `dialout` group to avoid needing `sudo`:
+
+    ```bash
+    sudo usermod -a -G dialout $USER
+    # Log out and back in for the change to take effect
+    ```
+
+    **Chip not entering download mode**
+
+    Hold the **BOOT** button on your development board, press and release **RESET**, then release **BOOT**. On most devkits this puts the chip into the ROM bootloader, which `espflash` needs to write firmware.
+
+    **Driver issues on Windows/macOS**
+
+    Make sure the USB-to-serial driver for your devkit's bridge chip (CH340, CP210x, or FTDI) is installed. Download it from the chip manufacturer's website.
+
+    <Tip>
+      Use `espflash board-info` to verify that `espflash` can communicate with your board before attempting a flash.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="core::mem::forget on HAL types">
+    **Symptom:** A peripheral stops working after you call `core::mem::forget` on a driver instance, or you see unexpected hardware state.
+
+    **Cause:** Many `esp-hal` types own hardware resources and perform cleanup in their `Drop` implementation (for example, disconnecting output pins or disabling peripheral clocks). Calling `core::mem::forget` skips `Drop`, leaving the hardware in an indeterminate state.
+
+    <Warning>
+      Never call `core::mem::forget` (or `ManuallyDrop`) on `esp-hal` driver instances. If you need to transfer ownership without dropping, restructure your code to use the type's own ownership-transfer APIs (such as `Channel::with_pin`) or wrap in an `Option`.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Minimum Supported Rust Version (MSRV)">
+    **Symptom:** The build fails with errors about unstable language features or missing methods on stable Rust.
+
+    **Cause:** `esp-hal` requires **Rust 1.88.0** or later. The crate is guaranteed to compile with the latest stable Rust version at the time of release, but not with older versions.
+
+    Check your current Rust version:
+
+    ```bash
+    rustc --version
+    ```
+
+    Update to the latest stable (or the `esp` toolchain for Xtensa targets):
+
+    ```bash
+    rustup update stable
+    # or
+    espup update   # for the esp toolchain
+    ```
+  </Accordion>
+
+  <Accordion title="Peripheral already taken / consumed">
+    **Symptom:** A compile error saying a value has been moved, or a runtime panic from `Peripherals::take()` returning `None`.
+
+    **Cause:** Peripheral structs in `esp-hal` use ownership to enforce single-use access. Once a peripheral is passed to a driver constructor, you cannot use the raw peripheral again — only the driver.
+
+    **Compile-time move errors** mean you are trying to use a peripheral after passing it to a driver. Keep a reference to the driver, not to the raw peripheral.
+
+    **Runtime panics from `take()`** mean `Peripherals::take()` was called more than once. Call it exactly once at the start of `main` and destructure the result:
+
+    ```rust
+    let peripherals = esp_hal::init(esp_hal::Config::default());
+    // Use peripherals.SPI2, peripherals.UART0, etc.
+    ```
+
+    If you need to share a peripheral across tasks, use a `Mutex` or split it into independent sub-resources before passing it to multiple consumers.
+  </Accordion>
+</AccordionGroup>
+
+## Getting help
+
+If none of the above resolves your issue:
+
+<CardGroup cols={2}>
+  <Card title="GitHub issues" icon="github" href="https://github.com/esp-rs/esp-hal/issues">
+    Search existing issues or open a new one. Include your chip, toolchain version, and a minimal reproducer.
+  </Card>
+  <Card title="Matrix chat" icon="message-circle" href="https://matrix.to/#/#esp-rs:matrix.org">
+    Join the `#esp-rs:matrix.org` room for real-time discussion with the community and maintainers.
+  </Card>
+</CardGroup>

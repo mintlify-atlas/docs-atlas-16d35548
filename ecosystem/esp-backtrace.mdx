@@ -1,0 +1,190 @@
+---
+title: "esp-backtrace"
+description: "Panic handler and stack backtrace support for ESP32 bare-metal programs."
+---
+
+`esp-backtrace` provides a `#[panic_handler]` implementation and the ability to capture stack backtraces on Espressif devices. It supports ESP32, ESP32-C2/C3/C5/C6/C61, ESP32-H2, and ESP32-S2/S3.
+
+Without a panic handler your program will fail to link. `esp-backtrace` is the easiest way to get a useful one during development — it prints the panic message and a backtrace to whatever output backend you choose.
+
+## Adding to your project
+
+<Steps>
+  <Step title="Add the dependency">
+    Add `esp-backtrace` to your `Cargo.toml` with your chip and the `panic-handler` feature:
+
+    ```toml
+    [dependencies]
+    esp-backtrace = { version = "0.18.1", features = [
+        "esp32c6",
+        "panic-handler",
+        "println",
+    ] }
+    ```
+
+    The `panic-handler` feature registers the `#[panic_handler]`. The `println` feature uses `esp-println` for output.
+  </Step>
+
+  <Step title="Link it into your binary">
+    Add a use declaration in your `main.rs` or `lib.rs` to ensure the panic handler is linked:
+
+    ```rust
+    use esp_backtrace as _;
+    ```
+
+    Without this, the linker may strip the handler as unreachable code.
+  </Step>
+
+  <Step title="Force frame pointers (RISC-V only)">
+    On RISC-V targets (all ESP32-C and ESP32-H chips), you must enable frame pointers for the backtrace to work. Add this to your `.cargo/config.toml`:
+
+    ```toml
+    [build]
+    rustflags = ["-C", "force-frame-pointers"]
+    ```
+
+    This is not required for Xtensa targets (ESP32, ESP32-S2, ESP32-S3).
+  </Step>
+</Steps>
+
+## What a panic looks like
+
+When your program panics, `esp-backtrace` prints something like this over your configured output:
+
+```
+====================== PANIC ======================
+panicked at 'index out of bounds: the len is 3 but the index is 5', src/main.rs:42:5
+
+Backtrace:
+
+0x42012abc
+0x42009f10
+0x420054e8
+0x42003b44
+```
+
+You can symbolicate those addresses with `addr2line` or `espflash`'s symbol tools to get file names and line numbers.
+
+## Output options
+
+Choose one of the following output features — they are mutually exclusive with each other:
+
+<Tabs>
+  <Tab title="println (esp-println)">
+    Uses `esp-println` for output. This is the most common choice.
+
+    ```toml
+    esp-backtrace = { version = "0.18.1", features = [
+        "esp32c6",
+        "panic-handler",
+        "println",
+        "esp-println/uart",   # or "esp-println/jtag-serial"
+    ] }
+    ```
+  </Tab>
+  <Tab title="defmt">
+    Outputs via the `defmt` binary logging framework.
+
+    ```toml
+    esp-backtrace = { version = "0.18.1", features = [
+        "esp32c6",
+        "panic-handler",
+        "defmt",
+    ] }
+    ```
+  </Tab>
+</Tabs>
+
+## Halt behavior
+
+After printing the backtrace, the panic handler loops forever by default. You can change this with optional features:
+
+<AccordionGroup>
+  <Accordion title="halt-cores — stop both CPUs">
+    On dual-core devices (ESP32, ESP32-S3), stalls both cores instead of looping.
+
+    ```toml
+    features = ["esp32s3", "panic-handler", "println", "halt-cores"]
+    ```
+  </Accordion>
+  <Accordion title="semihosting — exit via debugger">
+    Calls `semihosting::process::abort()` so the connected debugger knows the program has terminated. Useful in CI or automated test environments.
+
+    ```toml
+    features = ["esp32c6", "panic-handler", "println", "semihosting"]
+    ```
+  </Accordion>
+  <Accordion title="custom-halt — your own halt function">
+    Calls an `extern "Rust" fn custom_halt() -> !` that you implement. Lets you reset the device, write to flash, etc.
+
+    ```toml
+    features = ["esp32c6", "panic-handler", "println", "custom-halt"]
+    ```
+
+    ```rust
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn custom_halt() -> ! {
+        esp_hal::system::software_reset()
+    }
+    ```
+  </Accordion>
+  <Accordion title="custom-pre-backtrace — run code before the handler">
+    Calls an `extern "Rust" fn custom_pre_backtrace()` before the panic output begins. Useful for flushing logs or disabling peripherals.
+
+    ```toml
+    features = ["esp32c6", "panic-handler", "println", "custom-pre-backtrace"]
+    ```
+
+    ```rust
+    #[unsafe(no_mangle)]
+    pub extern "Rust" fn custom_pre_backtrace() {
+        // e.g. flush a UART buffer, set a GPIO pin low, etc.
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Capturing a backtrace manually
+
+You can capture a backtrace at any point in your code without going through the panic handler:
+
+```rust
+let backtrace = esp_backtrace::Backtrace::capture();
+
+for frame in backtrace.frames() {
+    println!("0x{:x}", frame.program_counter());
+}
+```
+
+This is useful for diagnostic logging, watchdog handlers, or any case where you want a call stack without panicking.
+
+## Development vs production
+
+<CardGroup cols={2}>
+  <Card title="Development" icon="bug">
+    Use `esp-backtrace` with `panic-handler` and `println` for full panic messages and backtraces. These are invaluable when debugging.
+  </Card>
+  <Card title="Production" icon="rocket">
+    Consider writing a minimal custom panic handler that resets the device, avoiding the code size cost of backtrace symbolication.
+
+    ```rust
+    #[panic_handler]
+    fn panic(_: &core::panic::PanicInfo) -> ! {
+        esp_hal::system::software_reset()
+    }
+    ```
+  </Card>
+</CardGroup>
+
+## Feature flags
+
+| Feature               | Default | Description                                                   |
+|-----------------------|---------|---------------------------------------------------------------|
+| `panic-handler`       | no      | Registers a `#[panic_handler]`                                |
+| `println`             | no      | Use `esp-println` for output                                  |
+| `defmt`               | no      | Use `defmt` for output                                        |
+| `colors`              | yes     | Print panic messages in red                                   |
+| `halt-cores`          | no      | Halt both CPUs on ESP32/ESP32-S3                              |
+| `semihosting`         | no      | Exit via semihosting call (for debugger/CI use)               |
+| `custom-halt`         | no      | Call `extern fn custom_halt() -> !` after panic output        |
+| `custom-pre-backtrace`| no      | Call `extern fn custom_pre_backtrace()` before panic output   |

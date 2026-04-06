@@ -1,0 +1,161 @@
+---
+title: "RMT (Remote Control)"
+description: "Use the RMT peripheral to generate and receive arbitrary pulse sequences on ESP32 microcontrollers with esp-hal."
+keywords: ["rmt", "remote control", "ws2812", "neopixel", "ir", "esp32", "esp-hal", "embedded rust"]
+---
+
+<Note>
+RMT requires the `unstable` feature flag in `Cargo.toml`.
+</Note>
+
+The RMT (Remote Control) peripheral converts pulse sequences stored in RAM to output signals, and converts input signals to pulse sequences. While its name implies infrared remote control, it is a general-purpose pulse encoder/decoder useful for any precise-timing protocol.
+
+**Common use cases:**
+- WS2812 / NeoPixel RGB LED control
+- Infrared remote control (NEC, RC5, and other protocols)
+- One-Wire protocol
+- Arbitrary waveform generation
+
+## Channel count
+
+| Chip | TX channels | RX channels |
+|------|-------------|-------------|
+| ESP32, ESP32-S2 | Up to 8 (configurable) | Up to 8 (configurable) |
+| ESP32-S3 | 4 (CH0–CH3) | 4 (CH4–CH7) |
+| ESP32-C3, C5, C6, H2 | 2 (CH0–CH1) | 2 (CH2–CH3) |
+
+## Pulse codes
+
+The `PulseCode` type encodes a single symbol: a level + duration pair for the first half and a level + duration pair for the second half:
+
+```rust
+use esp_hal::gpio::Level;
+use esp_hal::rmt::PulseCode;
+
+// High for 200 ticks, then Low for 50 ticks
+let code = PulseCode::new(Level::High, 200, Level::Low, 50);
+
+// End-of-stream marker (transmission stops here)
+let end = PulseCode::end_marker();
+```
+
+The `length1`/`length2` fields are 15-bit values representing durations in RMT clock ticks. Setting either to zero signals the end of transmission.
+
+## TX: transmitting pulse sequences
+
+<Steps>
+  <Step title="Initialise the RMT peripheral">
+    ```rust
+    use esp_hal::rmt::Rmt;
+    use esp_hal::time::Rate;
+
+    // 80 MHz clock on most chips; 32 MHz on H2
+    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80))?;
+    ```
+  </Step>
+  <Step title="Configure and create a TX channel">
+    ```rust
+    use esp_hal::rmt::{TxChannelConfig, TxChannelCreator};
+    use esp_hal::gpio::Level;
+
+    let tx_config = TxChannelConfig::default()
+        .with_clk_divider(1)
+        .with_idle_output_level(Level::Low)
+        .with_idle_output(false)
+        .with_carrier_modulation(false);
+
+    let mut channel = rmt
+        .channel0
+        .configure_tx(&tx_config)?
+        .with_pin(peripherals.GPIO4);
+    ```
+  </Step>
+  <Step title="Build a pulse sequence and transmit">
+    ```rust
+    use esp_hal::delay::Delay;
+    use esp_hal::gpio::Level;
+    use esp_hal::rmt::PulseCode;
+
+    let delay = Delay::new();
+
+    // Build a 20-symbol sequence with a long end marker
+    let mut data = [PulseCode::new(Level::High, 200, Level::Low, 50); 20];
+    data[data.len() - 2] = PulseCode::new(Level::High, 3000, Level::Low, 500);
+    data[data.len() - 1] = PulseCode::end_marker();
+
+    loop {
+        let transaction = channel.transmit(&data)?;
+        channel = transaction.wait()?; // blocks until done; recovers the channel
+        delay.delay_millis(500);
+    }
+    ```
+  </Step>
+</Steps>
+
+## RX: receiving pulse sequences
+
+```rust
+use esp_hal::rmt::{PulseCode, Rmt, RxChannelConfig, RxChannelCreator};
+use esp_hal::time::Rate;
+
+let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80))?;
+
+let rx_config = RxChannelConfig::default()
+    .with_clk_divider(1)
+    .with_idle_threshold(10_000); // signal is "done" after this many idle ticks
+
+// On chips with dedicated RX channels, use the appropriate channel number.
+// For ESP32-C3/C5/C6/H2 that's channel2 or channel3.
+let mut channel = rmt
+    .channel2
+    .configure_rx(&rx_config)?
+    .with_pin(peripherals.GPIO5);
+
+let mut data: [PulseCode; 48] = [PulseCode::default(); 48];
+
+loop {
+    let transaction = channel.receive(&mut data)?;
+
+    match transaction.wait() {
+        Ok((symbol_count, ch)) => {
+            channel = ch;
+            // data[..symbol_count] contains the received pulse codes
+            for code in &data[..symbol_count] {
+                if code.length1() == 0 { break; }
+                // process code.level1(), code.length1(), etc.
+            }
+        }
+        Err((_err, ch)) => {
+            channel = ch;
+        }
+    }
+}
+```
+
+## WS2812 / NeoPixel LEDs
+
+RMT is the standard way to drive WS2812B LEDs on ESP32. The `esp-hal-smartled` or `smart-leds` crates provide a ready-made abstraction:
+
+```toml
+[dependencies]
+esp-hal-smartled = "..."
+smart-leds       = "..."
+```
+
+```rust
+use esp_hal::rmt::Rmt;
+use esp_hal::time::Rate;
+use esp_hal_smartled::{SmartLedsAdapter, smartLedBuffer};
+
+let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
+let rmt_buffer = smartLedBuffer!(1);
+let mut leds = SmartLedsAdapter::new(rmt.channel0, peripherals.GPIO8, rmt_buffer);
+```
+
+## Clock frequency note
+
+On ESP32 and ESP32-S2 the RMT base clock is fixed at 80 MHz. On ESP32-H2 it is 32 MHz. For all other chips, 80 MHz is the typical choice.
+
+## Chip availability
+
+RMT is available on: ESP32, ESP32-S2, ESP32-S3, ESP32-C3, ESP32-C5, ESP32-C6, ESP32-H2. It is not present on ESP32-C2 or ESP32-C61.

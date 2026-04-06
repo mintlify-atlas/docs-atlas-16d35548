@@ -1,0 +1,222 @@
+---
+title: "Migrating from 1.0.0"
+description: "Breaking changes and updated APIs when upgrading esp-hal from 1.0.0 to the current development version."
+keywords: ["migration", "upgrade", "breaking changes", "esp-hal", "1.0.0"]
+---
+
+This guide covers every breaking change introduced after the `v1.0.0` release. Work through each section that applies to the peripherals and APIs you use.
+
+<Warning>
+  All changes listed here are **breaking**. Your code will not compile until you apply the relevant updates.
+</Warning>
+
+<Note>
+  If you depend on unstable APIs, pin your `esp-hal` dependency to an exact version in `Cargo.toml` to avoid unexpected breakage:
+
+  ```toml Cargo.toml
+  [dependencies]
+  esp-hal = "=1.0.0"
+  ```
+
+  Unstable APIs are not covered by semver guarantees and may change in any release.
+</Note>
+
+## RMT changes
+
+<AccordionGroup>
+  <Accordion title="configure_tx and configure_rx API changes">
+    `ChannelCreator::configure_tx` and `ChannelCreator::configure_rx` now take their configuration by reference instead of by value. The pin argument has also been removed from both methods. Use the new infallible `Channel::with_pin` to attach the pin after configuration — this avoids consuming the pin on error.
+
+    ```diff
+     let tx_config = TxChannelConfig::default();
+     let rx_config = RxChannelConfig::default();
+
+     let tx = rmt.channel0
+    -    .configure_tx(tx_pin, tx_config)
+    -    .unwrap();
+    +    .configure_tx(&tx_config)
+    +    .unwrap()
+    +    .with_pin(tx_pin);
+     
+     let rx = rmt.channel2
+    -    .configure_rx(rx_pin, rx_config)
+    -    .unwrap();
+    +    .configure_rx(&rx_config)
+    +    .unwrap()
+    +    .with_pin(rx_pin);
+    ```
+  </Accordion>
+
+  <Accordion title="SingleShotTxTransaction renamed to TxTransaction">
+    `SingleShotTxTransaction` has been renamed to `TxTransaction`. Update any type annotations or pattern matches that reference the old name.
+
+    ```diff
+    -let txn: SingleShotTxTransaction<'_, '_, PulseCode> = tx_channel.transmit(&data)?;
+    +let txn: TxTransaction<'_, '_, PulseCode> = tx_channel.transmit(&data)?;
+    ```
+  </Accordion>
+
+  <Accordion title="Blocking channel methods return the channel on error">
+    Several blocking `Channel` methods previously consumed the channel when an error occurred. They now return the channel in all cases — both on success and failure — so you can re-use it after handling an error.
+
+    This applies to:
+    - `Channel<'_, Blocking, Tx>::transmit`
+    - `Channel<'_, Blocking, Tx>::transmit_continuously`
+    - `Channel<'_, Blocking, Rx>::receive`
+
+    ```diff
+     let mut channel = todo!("set up tx channel");
+     
+     channel = match tx_channel.transmit(&data) {
+         Ok(txn) => {
+             match txn.wait() {
+                 Ok(c) => c,
+                 Err((e, c)) => {
+                     // TODO: Handle the error
+                     c
+                 }
+             }
+         }
+    -    Err(e) => {
+    -        // Channel cannot be re-used here (if it had the 'static lifetime)
+    -        panic!();
+    +    Err((e, c)) => {
+    +        // TODO: Handle the error
+    +        c
+         }
+     }
+    ```
+  </Accordion>
+
+  <Accordion title="Configuration error type changes">
+    The `Rmt::new`, `ChannelCreator::configure_tx`, and `ChannelCreator::configure_rx` methods now return `ConfigError` instead of `Error`. The configuration-related variants have been removed from `Error` and moved (with some renames) to the new `ConfigError` enum. Update any error-handling code that matches on those removed variants.
+  </Accordion>
+
+  <Accordion title="PulseCode required directly in buffers">
+    Support for `Into<PulseCode>` and `From<PulseCode>` in Tx and Rx methods has been removed. Buffers must now contain `PulseCode` values directly. The generic type parameter has also been removed from `TxTransaction` and `RxTransaction`.
+
+    ```diff
+    -let tx_data: [u32; 8] = todo!();
+    -let mut rx_data: [u32; 8] = [0u32; 8];
+    -let tx_transaction: TxTransaction<'_, '_, u32> = tx_channel.transmit(&tx_data)?;
+    -let rx_transaction: RxTransaction<'_, '_, u32> = rx_channel.receive(&mut rx_data)?;
+    +let tx_data: [PulseCode; 8] = todo!();
+    +let mut rx_data: [PulseCode; 8] = [PulseCode::default(); 8];
+    +let tx_transaction: TxTransaction<'_, '_> = tx_channel.transmit(&tx_data)?;
+    +let rx_transaction: RxTransaction<'_, '_> = rx_channel.receive(&mut rx_data)?;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## SHA changes
+
+`ShaDigest` now requires **exclusive** (`&mut`) access to the SHA peripheral to prevent unsound concurrent access. If you were manually constructing `ShaDigest` instances (not through `Sha::start()` or `Sha::start_owned()`), update your code to pass a mutable reference:
+
+```diff
+ let mut sha = Sha::new(peripherals.SHA);
+-let sha_ref = &sha;
++let sha_ref = &mut sha;
+ let digest = ShaDigest::<Sha256, _>::new(sha_ref);
+```
+
+<Note>
+  The recommended `Sha::start()` and `Sha::start_owned()` methods already require `&mut self`, so typical usage is unaffected.
+</Note>
+
+## Clock changes
+
+`RtcClock::xtal_freq()` and the `XtalClock` enum have been removed. Access the crystal clock frequency through the `Clocks` struct instead:
+
+```rust
+let xtal_clock = esp_hal::clock::Clocks::get().xtal_clock;
+```
+
+The returned value is a `Rate`.
+
+## Interrupt handling changes
+
+<AccordionGroup>
+  <Accordion title="Direct binding on Xtensa removed">
+    On Xtensa MCUs (ESP32, ESP32-S2, ESP32-S3), the direct interrupt binding option has been removed entirely. Use the standard interrupt binding APIs instead.
+  </Accordion>
+
+  <Accordion title="enable_direct on RISC-V is now infallible">
+    On RISC-V MCUs, `interrupt::enable_direct` now takes a `DirectBindableCpuInterrupt` instead of `CpuInterrupt` and is infallible — remove the `.unwrap()` call.
+
+    `DirectBindableCpuInterrupt` is numbered from 0 and corresponds to CPU interrupt numbers that are not disabled or reserved for vectoring.
+
+    ```diff
+     interrupt::enable_direct(
+         peripheral_interrupt,
+         interrupt_priority,
+    -    CpuInterrupt::Interrupt25,
+    +    DirectBindableCpuInterrupt::Interrupt0,
+         handler_function,
+    -).unwrap();
+    +);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## ECC changes
+
+<AccordionGroup>
+  <Accordion title="Ecc::new requires a Config parameter">
+    The `Ecc::new` constructor now requires a configuration argument.
+
+    ```diff
+    -let mut ecc = Ecc::new(peripherals.ECC);
+    +let mut ecc = Ecc::new(peripherals.ECC, Config::default());
+    ```
+  </Accordion>
+
+  <Accordion title="Little-endian input and output">
+    All `Ecc` methods now expect **little-endian** input and produce **little-endian** output. If you were passing big-endian byte arrays, reverse them before calling the driver.
+  </Accordion>
+
+  <Accordion title="Methods return result handles">
+    `Ecc` methods no longer write results back directly into the input buffers. Instead they return a result handle that you use to retrieve the output. Modular arithmetic methods now take the modulus as an explicit argument.
+
+    ```diff
+    -ecc.mod_operations(EllipticCurve::P256, &mut a, &mut b, WorkMode::ModAdd).unwrap();
+    +let result = ecc.modular_addition(EllipticCurve::P256, EccModBase::OrderOfCurve, &a, &b).unwrap();
+    +result.read_scalar_result(&mut a).unwrap();
+    ```
+
+    If an operation only performs point verification, read the outcome using the `success` method on the result handle. Point verification errors are no longer returned by the method itself; they are returned by the handle.
+  </Accordion>
+</AccordionGroup>
+
+## eFuse changes
+
+<AccordionGroup>
+  <Accordion title="Efuse struct replaced by free-standing functions">
+    The `Efuse` struct has been removed. All functionality is now available as free-standing functions in the `efuse` module. Several functions have been renamed:
+
+    | Old | New |
+    |---|---|
+    | `Efuse::mac_address()` | `efuse::base_mac_address()` |
+    | `Efuse::set_mac_address(mac)` | `efuse::override_mac_address(mac)` |
+    | `Efuse::interface_mac_address(kind)` | `efuse::interface_mac_address(kind)` |
+    | `Efuse::read_field_le(field)` | `efuse::read_field_le(field)` |
+    | `Efuse::read_bit(field)` | `efuse::read_bit(field)` |
+    | `Efuse::chip_revision()` | `efuse::chip_revision()` |
+
+    `Efuse::read_base_mac_address()` has been removed — use `efuse::base_mac_address()` instead.
+
+    `MacAddress::as_bytes_mut()` has been removed — use `MacAddress::as_bytes()` for read access.
+  </Accordion>
+
+  <Accordion title="chip_revision returns ChipRevision">
+    `efuse::chip_revision` now returns a `ChipRevision` struct rather than a plain `u16`. The `ChipRevision` struct avoids integer multiplication and division for common comparisons.
+
+    If you need the old combined `u16` representation, call `.combined()`:
+
+    ```diff
+    -let revision = chip_revision();
+    +let revision = chip_revision().combined();
+    ```
+
+    A new `packed` representation (also encoded as `u16`) is also available and is less computationally expensive than `combined`.
+  </Accordion>
+</AccordionGroup>

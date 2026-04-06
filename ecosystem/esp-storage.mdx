@@ -1,0 +1,166 @@
+---
+title: "esp-storage"
+description: "Access unencrypted ESP32 flash memory via the embedded-storage traits for storing configuration and persistent data."
+---
+
+`esp-storage` implements the [`embedded-storage`](https://github.com/rust-embedded-community/embedded-storage) `NorFlash` and `ReadNorFlash` traits for ESP32 flash memory. It gives you a portable, trait-based interface to read, write, and erase flash sectors directly from `no_std` code.
+
+Supported chips: ESP32, ESP32-C2, ESP32-C3, ESP32-C5, ESP32-C6, ESP32-C61, ESP32-H2, ESP32-S2, ESP32-S3.
+
+## Adding to your project
+
+<Steps>
+  <Step title="Add the dependency">
+    ```toml
+    [dependencies]
+    esp-storage = { version = "0.8.1", features = ["esp32c6"] }
+    embedded-storage = "0.3"
+    ```
+
+    The available chip features are: `esp32`, `esp32c2`, `esp32c3`, `esp32c5`, `esp32c6`, `esp32c61`, `esp32h2`, `esp32s2`, `esp32s3`.
+  </Step>
+
+  <Step title="Optimize for ESP32 debug builds">
+    On the original ESP32, flash operations must be compiled with optimization level 2 or 3. Add this to your `Cargo.toml` so debug builds still work:
+
+    ```toml
+    [profile.dev.package.esp-storage]
+    opt-level = 3
+    ```
+
+    This only affects the `esp-storage` crate itself — your own code still compiles unoptimized in debug mode.
+  </Step>
+</Steps>
+
+## Basic usage
+
+`FlashStorage` is the main type. Create it by passing the `FLASH` peripheral, then use the `ReadNorFlash` and `NorFlash` trait methods.
+
+```rust
+use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+use esp_storage::FlashStorage;
+
+fn main() {
+    let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    let mut flash = FlashStorage::new(peripherals.FLASH);
+
+    // Read 256 bytes starting at offset 0x9000
+    // Buffer must be 4-byte aligned; offset and length must be multiples of 4
+    let mut buf = [0u8; 256];
+    flash.read(0x9000, &mut buf).unwrap();
+
+    // Erase a sector (must be sector-aligned: multiples of 4096)
+    flash.erase(0x9000, 0x9000 + FlashStorage::SECTOR_SIZE).unwrap();
+
+    // Write data (offset and length must be multiples of 4)
+    let data = b"Hello, flash!\x00\x00\x00"; // padded to 4-byte boundary
+    flash.write(0x9000, data).unwrap();
+}
+```
+
+## Alignment requirements
+
+Flash hardware on ESP32 chips has strict alignment requirements:
+
+| Operation | Minimum alignment |
+|-----------|-------------------|
+| Read      | 4 bytes (word-aligned offset and length) |
+| Write     | 4 bytes (word-aligned offset and length) |
+| Erase     | 4096 bytes (one sector)                 |
+
+If you pass unaligned values, `FlashStorage` returns `FlashStorageError::NotAligned`.
+
+<Tip>
+  Enable the `bytewise-read` feature to relax read alignment to 1 byte. This is useful when reading arbitrary offsets without manual padding, at the cost of an extra internal buffer.
+</Tip>
+
+## Flash layout constants
+
+`FlashStorage` exposes the physical layout constants of the flash hardware:
+
+```rust
+FlashStorage::WORD_SIZE   // 4 bytes
+FlashStorage::SECTOR_SIZE // 4096 bytes (4 KB) — minimum erase unit
+FlashStorage::BLOCK_SIZE  // 65536 bytes (64 KB) — larger erase unit
+```
+
+## Common use case: persistent configuration
+
+A typical pattern is to reserve a flash partition for configuration data and read/write it on boot and after changes. Choose an offset that doesn't overlap your firmware image — a common convention is to place user data at a known offset near the end of the flash.
+
+```rust
+use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+use esp_storage::FlashStorage;
+
+const CONFIG_OFFSET: u32 = 0x110000; // example: 1 MB into flash
+const CONFIG_SIZE: u32 = FlashStorage::SECTOR_SIZE;
+
+#[repr(C, align(4))]
+struct Config {
+    magic: u32,
+    wifi_ssid: [u8; 64],
+    wifi_pass: [u8; 64],
+}
+
+fn load_config(flash: &mut FlashStorage) -> Config {
+    let mut buf = [0u8; core::mem::size_of::<Config>()];
+    flash.read(CONFIG_OFFSET, &mut buf).unwrap();
+    unsafe { core::ptr::read(buf.as_ptr() as *const Config) }
+}
+
+fn save_config(flash: &mut FlashStorage, config: &Config) {
+    // Must erase before writing
+    flash.erase(CONFIG_OFFSET, CONFIG_OFFSET + CONFIG_SIZE).unwrap();
+
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            config as *const Config as *const u8,
+            core::mem::size_of::<Config>(),
+        )
+    };
+    flash.write(CONFIG_OFFSET, bytes).unwrap();
+}
+```
+
+<Warning>
+  You must erase flash before writing to it. Writing without erasing first produces corrupted data because flash bits can only be cleared by an erase operation, not set individually.
+</Warning>
+
+## Async usage
+
+`FlashStorage` only implements blocking traits from `embedded-storage`. If you need to use it in an async context, wrap it with one of the adapters from `embassy-embedded-hal`:
+
+```toml
+[dependencies]
+embassy-embedded-hal = "0.3"
+```
+
+```rust
+use embassy_embedded_hal::adapter::BlockingAsync;
+
+let async_flash = BlockingAsync::new(flash);
+// async_flash now implements embedded-storage-async traits
+```
+
+## Multi-core systems
+
+On dual-core chips (ESP32, ESP32-S3), writing to flash while the second core is fetching instructions from flash causes a crash. `FlashStorage` detects this and returns `FlashStorageError::OtherCoreRunning` by default. You can change this behavior:
+
+```rust
+// Automatically park the second core during writes, then resume it
+let flash = FlashStorage::new(peripherals.FLASH).multicore_auto_park();
+
+// Ignore the second core (only safe if you know it isn't executing from flash)
+let flash = unsafe {
+    FlashStorage::new(peripherals.FLASH).multicore_ignore()
+};
+```
+
+## Feature flags
+
+| Feature            | Default | Description                                            |
+|--------------------|---------|--------------------------------------------------------|
+| `critical-section` | yes     | Wrap flash operations in a critical section            |
+| `bytewise-read`    | no      | Allow reading at any byte offset (adds internal buffer)|
+| `defmt`            | no      | Implement `defmt::Format` on error types               |

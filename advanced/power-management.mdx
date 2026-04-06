@@ -1,0 +1,152 @@
+---
+title: "Power management"
+description: "Configure light sleep and deep sleep modes with multiple wakeup sources to reduce power consumption on ESP32 chips."
+---
+
+The `rtc_cntl` module exposes sleep and wakeup functionality through the `Rtc` driver. You can put the chip into a low-power sleep state and configure one or more sources that will wake it back up.
+
+<Warning>
+  Sleep and wakeup drivers are gated behind the `unstable` feature. They may change in minor releases without notice. See [Unstable APIs](/advanced/unstable-apis) for guidance on opting in.
+</Warning>
+
+## Sleep modes
+
+<Tabs>
+  <Tab title="Light sleep">
+    In light sleep, the CPU is halted and most clocks are gated, but RAM and peripheral state are preserved. The chip resumes execution immediately after waking — no reboot occurs and no data is lost.
+
+    **Typical power consumption:** tens to hundreds of µA, depending on the chip and which peripherals remain active.
+
+    Light sleep is suitable when you need fast wake-up latency (sub-millisecond) and want to keep peripheral state intact between sleep periods.
+
+    ```rust
+    use core::time::Duration;
+    use esp_hal::rtc_cntl::{Rtc, sleep::TimerWakeupSource};
+
+    let mut rtc = Rtc::new(peripherals.LPWR);
+    let timer = TimerWakeupSource::new(Duration::from_millis(500));
+
+    // Returns after the chip wakes up — execution continues from this point.
+    rtc.sleep_light(&[&timer]);
+    ```
+  </Tab>
+  <Tab title="Deep sleep">
+    In deep sleep, the CPU, most RAM, and all peripherals clocked from APB_CLK are powered off. Only the RTC domain (RTC memory, RTC slow memory, and the LP core if present) remains powered. The chip wakes up by performing a reset — execution restarts from `main`.
+
+    **Typical power consumption:** single-digit µA or less on most chips.
+
+    Deep sleep is suitable for battery-powered applications where the chip spends most of its time asleep and wake-up latency is not critical.
+
+    ```rust
+    use core::time::Duration;
+    use esp_hal::rtc_cntl::{Rtc, sleep::TimerWakeupSource};
+
+    let mut rtc = Rtc::new(peripherals.LPWR);
+    let timer = TimerWakeupSource::new(Duration::from_secs(5));
+
+    // Does not return — the chip resets when it wakes.
+    rtc.sleep_deep(&[&timer]);
+    ```
+
+    Variables annotated with `#[esp_hal::ram(persistent)]` survive deep sleep by being placed in RTC slow memory.
+  </Tab>
+</Tabs>
+
+<Warning>
+  Before entering sleep, ensure that any in-flight DMA transfers are complete and that peripherals are properly deinitialized. Dropping driver instances before calling `sleep_deep` or `sleep_light` will deactivate the associated peripheral clocks. Failing to do so can result in undefined hardware behavior or data corruption.
+</Warning>
+
+## Wakeup sources
+
+You can pass multiple wakeup sources to `sleep_deep` or `sleep_light` as a slice. The chip wakes as soon as any one of them triggers.
+
+### Timer
+
+Wake the chip after a fixed duration using `TimerWakeupSource`. Supported on all chips with sleep driver support.
+
+```rust
+use core::time::Duration;
+use esp_hal::rtc_cntl::sleep::TimerWakeupSource;
+
+let timer = TimerWakeupSource::new(Duration::from_secs(10));
+rtc.sleep_deep(&[&timer]);
+```
+
+### GPIO — Ext0 (single pin)
+
+`Ext0WakeupSource` monitors a single RTC-capable GPIO pin. Only supported on ESP32, ESP32-S2, and ESP32-S3.
+
+```rust
+use esp_hal::rtc_cntl::sleep::{Ext0WakeupSource, WakeupLevel};
+
+let wakeup_pin = /* an RTC-capable GPIO pin */;
+let ext0 = Ext0WakeupSource::new(wakeup_pin, WakeupLevel::High);
+rtc.sleep_deep(&[&ext0]);
+```
+
+### GPIO — Ext1 (multiple pins)
+
+`Ext1WakeupSource` can monitor multiple RTC-capable GPIO pins simultaneously. Supported on ESP32, ESP32-S2, and ESP32-S3. In light sleep mode, ordinary GPIO wakeup (not requiring RTC pins) is also available on RISC-V chips.
+
+```rust
+use esp_hal::rtc_cntl::sleep::{Ext1WakeupSource, WakeupLevel};
+
+let ext1 = Ext1WakeupSource::new(pins, WakeupLevel::High);
+rtc.sleep_deep(&[&ext1]);
+```
+
+### ULP core
+
+On chips with a ULP (ultra-low-power) coprocessor — ESP32, ESP32-S2, ESP32-S3 — the ULP can run small programs while the main CPU sleeps and wake the main CPU when a condition is met.
+
+### Combining wakeup sources
+
+```rust
+use core::time::Duration;
+use esp_hal::rtc_cntl::{Rtc, sleep::{TimerWakeupSource, Ext0WakeupSource, WakeupLevel}};
+
+let mut rtc = Rtc::new(peripherals.LPWR);
+let timer = TimerWakeupSource::new(Duration::from_secs(30));
+let gpio  = Ext0WakeupSource::new(my_pin, WakeupLevel::High);
+
+// Wakes on whichever fires first: a 30-second timeout or a GPIO edge.
+rtc.sleep_deep(&[&timer, &gpio]);
+```
+
+## Checking the wakeup cause
+
+After waking from deep sleep, you can inspect why the chip woke up:
+
+```rust
+use esp_hal::rtc_cntl::{reset_reason, wakeup_cause};
+use esp_hal::system::{Cpu, SleepSource};
+
+let reason = reset_reason(Cpu::ProCpu);
+let source = wakeup_cause();
+
+match source {
+    SleepSource::Timer  => { /* woke from timer */ }
+    SleepSource::Ext0   => { /* woke from Ext0 GPIO */ }
+    SleepSource::Ext1   => { /* woke from Ext1 GPIO */ }
+    SleepSource::Ulp    => { /* woke from ULP coprocessor */ }
+    SleepSource::Gpio   => { /* woke from GPIO (light sleep) */ }
+    SleepSource::Uart   => { /* woke from UART activity */ }
+    _                   => {}
+}
+```
+
+## Chip support
+
+| Chip | Light sleep | Deep sleep | Ext0 | Ext1 | ULP wakeup |
+|------|-------------|------------|------|------|------------|
+| ESP32 | Yes | Yes | Yes | Yes | Yes |
+| ESP32-S2 | Yes | Yes | Yes | Yes | Yes |
+| ESP32-S3 | Yes | Yes | Yes | Yes | Yes |
+| ESP32-C2 | Yes | Yes | No | No | No |
+| ESP32-C3 | Yes | Yes | No | No | No |
+| ESP32-C6 | Yes | Yes | No | No | Yes (RISC-V LP core) |
+| ESP32-H2 | Yes | Yes | No | No | No |
+
+<Note>
+  Always check the peripheral support table for your specific chip in the esp-hal documentation. Support for individual wakeup sources is detected at compile time via chip-specific configuration flags.
+</Note>

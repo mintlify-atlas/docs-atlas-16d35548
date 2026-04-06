@@ -1,0 +1,203 @@
+---
+title: "esp-radio"
+description: "Wi-Fi, Bluetooth, and ESP-NOW driver for Espressif ESP32 chips in bare-metal Rust."
+---
+
+`esp-radio` is the wireless stack for ESP32 bare-metal programs. It provides Wi-Fi, Bluetooth Low Energy (BLE), ESP-NOW, and IEEE 802.15.4 support, all built on top of `esp-hal`.
+
+<Note>
+  `esp-radio` requires you to enable the `unstable` feature on `esp-hal`. The radio drivers are under active development and the APIs may change between releases.
+</Note>
+
+## Chip support
+
+|            | Wi-Fi | BLE | Coex (Wi-Fi + BLE) | ESP-NOW | IEEE 802.15.4 |
+|:----------:|:-----:|:---:|:------------------:|:-------:|:-------------:|
+| ESP32      |  ✓    |  ✓  |         ✓          |    ✓    |      —        |
+| ESP32-C2   |  ✓    |  ✓  |         ✓          |    ✓    |      —        |
+| ESP32-C3   |  ✓    |  ✓  |         ✓          |    ✓    |      —        |
+| ESP32-C5   |  ✓    |  ✓  |         ✓          |    ✓    |      ✓        |
+| ESP32-C6   |  ✓    |  ✓  |         ✓          |    ✓    |      ✓        |
+| ESP32-C61  |  ✓    |  ✓  |         ✓          |    ✓    |      —        |
+| ESP32-H2   |  —    |  ✓  |         —          |    —    |      ✓        |
+| ESP32-S2   |  ✓    |  —  |         —          |    ✓    |      —        |
+| ESP32-S3   |  ✓    |  ✓  |         ✓          |    ✓    |      —        |
+
+## Adding to your project
+
+<Steps>
+  <Step title="Add the dependency">
+    Add `esp-radio` and enable both the chip feature and the protocol you want:
+
+    <Tabs>
+      <Tab title="Wi-Fi">
+        ```toml
+        [dependencies]
+        esp-radio = { version = "0.17.0", features = ["esp32c6", "wifi"] }
+        esp-hal  = { version = "1.0",    features = ["esp32c6", "unstable"] }
+        esp-alloc = { version = "0.9.0", features = ["esp32c6"] }
+        ```
+      </Tab>
+      <Tab title="BLE">
+        ```toml
+        [dependencies]
+        esp-radio = { version = "0.17.0", features = ["esp32c6", "ble", "unstable"] }
+        esp-hal  = { version = "1.0",    features = ["esp32c6", "unstable"] }
+        esp-alloc = { version = "0.9.0", features = ["esp32c6"] }
+        ```
+      </Tab>
+      <Tab title="ESP-NOW">
+        ```toml
+        [dependencies]
+        esp-radio = { version = "0.17.0", features = ["esp32c6", "wifi", "esp-now", "unstable"] }
+        esp-hal  = { version = "1.0",    features = ["esp32c6", "unstable"] }
+        esp-alloc = { version = "0.9.0", features = ["esp32c6"] }
+        ```
+      </Tab>
+      <Tab title="IEEE 802.15.4">
+        ```toml
+        [dependencies]
+        esp-radio = { version = "0.17.0", features = ["esp32c6", "ieee802154", "unstable"] }
+        esp-hal  = { version = "1.0",    features = ["esp32c6", "unstable"] }
+        esp-alloc = { version = "0.9.0", features = ["esp32c6"] }
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Initialize a heap">
+    `esp-radio` needs dynamic memory. Initialize a heap early in `main` using `esp-alloc`:
+
+    ```rust
+    use esp_alloc as _;
+
+    // In main, before any radio initialization:
+    esp_alloc::heap_allocator!(size: 72 * 1024);
+    ```
+  </Step>
+
+  <Step title="Start the radio">
+    Initialize the radio using the appropriate constructor. The following sections show examples for each protocol.
+  </Step>
+</Steps>
+
+## Wi-Fi
+
+`esp-radio` uses [embassy](https://embassy.dev/) for async Wi-Fi. The `embassy-net` crate provides the TCP/IP stack.
+
+### Minimal Wi-Fi station example
+
+```rust
+use esp_radio::wifi::{
+    Config, ControllerConfig, WifiController,
+    sta::StationConfig,
+    Interface,
+};
+
+// Configure and start Wi-Fi
+let station_config = Config::Station(
+    StationConfig::default()
+        .with_ssid("MyNetwork")
+        .with_password("my-password".into()),
+);
+
+let (mut controller, interfaces) = esp_radio::wifi::new(
+    peripherals.WIFI,
+    ControllerConfig::default().with_initial_config(station_config),
+)
+.unwrap();
+
+let wifi_interface = interfaces.station;
+
+// Set up the embassy-net stack
+let (stack, runner) = embassy_net::new(
+    wifi_interface,
+    embassy_net::Config::dhcpv4(Default::default()),
+    mk_static!(StackResources<3>, StackResources::<3>::new()),
+    seed,
+);
+
+// Connect asynchronously
+controller.connect_async().await.unwrap();
+stack.wait_config_up().await;
+
+if let Some(config) = stack.config_v4() {
+    println!("Got IP: {}", config.address);
+}
+```
+
+### Connection task pattern
+
+Keeping Wi-Fi connected is best done in a dedicated embassy task that reconnects on drops:
+
+```rust
+#[embassy_executor::task]
+async fn connection(mut controller: WifiController<'static>) {
+    loop {
+        match controller.connect_async().await {
+            Ok(_) => {
+                // Wait until disconnected
+                controller.wait_for_disconnect_async().await.ok();
+            }
+            Err(e) => println!("Failed to connect: {:?}", e),
+        }
+        Timer::after(Duration::from_secs(5)).await;
+    }
+}
+```
+
+### Network task
+
+```rust
+#[embassy_executor::task]
+async fn net_task(mut runner: Runner<'static, Interface<'static>>) {
+    runner.run().await
+}
+```
+
+## Bluetooth (BLE)
+
+`esp-radio` exposes a raw HCI interface. Espressif recommends using the [TrouBLE](https://github.com/embassy-rs/trouble) Bluetooth stack on top of it, which provides a high-level BLE host implementation.
+
+```toml
+[dependencies]
+trouble-host = "0.1"
+bt-hci = "0.8"
+esp-radio = { version = "0.17.0", features = ["esp32c6", "ble", "unstable"] }
+```
+
+Full BLE examples using TrouBLE are available in the [TrouBLE examples for ESP32](https://github.com/embassy-rs/trouble/tree/main/examples/esp32).
+
+## ESP-NOW
+
+ESP-NOW is Espressif's low-latency, connectionless wireless protocol. See the [ESP-NOW](/ecosystem/esp-now) page for full usage details.
+
+## IEEE 802.15.4
+
+The IEEE 802.15.4 radio is available on ESP32-C5, ESP32-C6, and ESP32-H2. See the [IEEE 802.15.4](/ecosystem/ieee802154) page for full usage details.
+
+## Wi-Fi + BLE coexistence
+
+On supported chips, you can run Wi-Fi and BLE simultaneously with the `coex` feature:
+
+```toml
+esp-radio = { version = "0.17.0", features = ["esp32c6", "wifi", "ble", "coex", "unstable"] }
+```
+
+## Feature flags
+
+| Feature              | Default | Description                                                  |
+|----------------------|---------|--------------------------------------------------------------|
+| `wifi`               | no      | Enable Wi-Fi support                                         |
+| `ble`                | no      | Enable BLE support (unstable)                                |
+| `esp-now`            | no      | Enable ESP-NOW (requires `wifi`, unstable)                   |
+| `ieee802154`         | no      | Enable IEEE 802.15.4 (unstable, C5/C6/H2 only)              |
+| `coex`               | no      | Wi-Fi + BLE coexistence (unstable)                           |
+| `sniffer`            | no      | Wi-Fi sniffer mode (unstable)                                |
+| `wifi-eap`           | no      | Wi-Fi Enterprise EAP authentication (unstable)               |
+| `csi`                | no      | Wi-Fi Channel State Information (unstable)                   |
+| `unstable`           | no      | Gate unstable APIs; required for BLE, ESP-NOW, IEEE 802.15.4 |
+| `log-04`             | no      | Enable `log` crate integration                               |
+| `defmt`              | no      | Enable `defmt` logging integration                           |
+| `esp-alloc`          | yes     | Use `esp-alloc` for internal allocations                     |
+| `print-logs-from-driver` | no  | Print internal Wi-Fi/BLE driver logs at info level (unstable)|

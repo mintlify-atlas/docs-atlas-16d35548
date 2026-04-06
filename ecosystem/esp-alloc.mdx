@@ -1,0 +1,144 @@
+---
+title: "esp-alloc"
+description: "A no_std heap allocator for ESP32 programs, enabling dynamic memory allocation with Vec, String, Box, and more."
+---
+
+`esp-alloc` is a simple heap allocator for RISC-V and Xtensa processors from Espressif. It supports all currently available ESP32 family devices and works in `no_std` environments.
+
+Without a heap allocator, you cannot use Rust's standard dynamic allocation types like `Vec`, `String`, or `Box`. `esp-alloc` provides this by letting you carve out a static memory region and hand it to a global allocator.
+
+## Adding to your project
+
+<Steps>
+  <Step title="Add the dependency">
+    Add `esp-alloc` to your `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    esp-alloc = "0.9.0"
+    ```
+
+    No chip feature is required — `esp-alloc` detects the target from the build environment automatically.
+  </Step>
+
+  <Step title="Initialize the heap">
+    Call your heap initialization function before any dynamic allocation takes place — typically at the start of `main`:
+
+    ```rust
+    use esp_alloc as _;
+
+    fn init_heap() {
+        const HEAP_SIZE: usize = 32 * 1024;
+        static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
+
+        unsafe {
+            esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
+                HEAP.as_mut_ptr() as *mut u8,
+                HEAP_SIZE,
+                esp_alloc::MemoryCapability::Internal.into(),
+            ));
+        }
+    }
+    ```
+
+    Or use the convenience macro, which does the same thing in one line:
+
+    ```rust
+    esp_alloc::heap_allocator!(size: 32 * 1024);
+    ```
+  </Step>
+
+  <Step title="Use dynamic allocation">
+    Once the heap is initialized, you can use `alloc` types normally. Make sure to include `extern crate alloc;` or use the types from the `alloc` crate:
+
+    ```rust
+    extern crate alloc;
+    use alloc::{vec::Vec, string::String, boxed::Box};
+
+    let mut v: Vec<u32> = Vec::new();
+    v.push(42);
+
+    let s = String::from("Hello, ESP32!");
+    ```
+  </Step>
+</Steps>
+
+## Using PSRAM as heap
+
+On chips with external PSRAM (ESP32, ESP32-S2, ESP32-S3, ESP32-S3), you can use PSRAM as an additional heap region. Use the `psram_allocator!` macro:
+
+```rust
+let p = esp_hal::init(esp_hal::Config::default());
+esp_alloc::psram_allocator!(p.PSRAM, esp_hal::psram);
+```
+
+You can also combine internal and PSRAM heaps by calling `heap_allocator!` and `psram_allocator!` together. The allocator supports up to three separate memory regions.
+
+<Warning>
+  On ESP32, ESP32-S2, and ESP32-S3, atomic instructions do not work correctly when the memory they access is in PSRAM. Do not allocate `Atomic*` types — directly or indirectly — in PSRAM.
+</Warning>
+
+### Allocating explicitly in PSRAM
+
+If you want to control which allocations go to PSRAM, use the `ExternalMemory` allocator type with [`allocator-api2`](https://crates.io/crates/allocator-api2):
+
+```toml
+# Cargo.toml
+allocator-api2 = { version = "0.3", default-features = false, features = ["alloc"] }
+```
+
+```rust
+use allocator_api2::vec::Vec;
+
+let p = esp_hal::init(esp_hal::Config::default());
+esp_alloc::psram_allocator!(p.PSRAM, esp_hal::psram);
+
+// This Vec lives in PSRAM
+let mut large_buf: Vec<u8, _> = Vec::new_in(esp_alloc::ExternalMemory);
+```
+
+Use `InternalMemory` to explicitly allocate in internal RAM:
+
+```rust
+let mut vec: Vec<u32, _> = Vec::new_in(esp_alloc::InternalMemory);
+```
+
+## MemoryCapability
+
+`MemoryCapability` describes the properties of a memory region passed to `HeapRegion::new`:
+
+| Variant    | Description                                             |
+|------------|---------------------------------------------------------|
+| `Internal` | Internal SRAM; safe for all operations including DMA    |
+| `External` | External SPI RAM (PSRAM); larger but with restrictions  |
+
+## Heap statistics
+
+You can inspect heap usage at runtime. `HeapStats` implements `Display` so you can print it directly:
+
+```rust
+let stats = esp_alloc::HEAP.stats();
+println!("{}", stats);
+```
+
+Example output:
+
+```
+HEAP INFO
+Size: 131068
+Current usage: 46148
+Memory Layout:
+Internal | ████████████░░░░░░░░░░░░░░░░░░░░░░░ | Used: 35% (Used 46148 of 131068, free: 84920)
+```
+
+Enable the `internal-heap-stats` feature for additional tracking (max usage, total allocated/freed bytes). Note this adds overhead to every allocation and deallocation.
+
+## Feature flags
+
+| Feature               | Default | Description                                                 |
+|-----------------------|---------|-------------------------------------------------------------|
+| `global-allocator`    | yes     | Registers `EspHeap` as the `#[global_allocator]`            |
+| `compat`              | yes     | Provides C-compatible `malloc`/`free` functions             |
+| `defmt`               | no      | Implements `defmt::Format` on `HeapStats` and `RegionStats` |
+| `internal-heap-stats` | no      | Tracks max usage, total allocated/freed (adds CPU overhead) |
+| `nightly`             | no      | Enables nightly `allocator_api` feature                     |

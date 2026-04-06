@@ -1,0 +1,149 @@
+---
+title: "UART"
+description: "Configure and use UART for serial communication on ESP32 microcontrollers with esp-hal."
+keywords: ["uart", "serial", "rs232", "esp32", "esp-hal", "embedded rust", "baud rate"]
+---
+
+UART provides full-duplex asynchronous serial communication. It supports RS-232 and RS-485 protocols and is available on all supported chips.
+
+## Creating a UART instance
+
+<Steps>
+  <Step title="Import types">
+    ```rust
+    use esp_hal::uart::{Config, DataBits, Parity, StopBits, Uart};
+    ```
+  </Step>
+  <Step title="Build a configuration">
+    ```rust
+    let config = Config::default()
+        .with_baudrate(115_200)
+        .with_data_bits(DataBits::_8)
+        .with_parity(Parity::None)
+        .with_stop_bits(StopBits::_1);
+    ```
+    The default configuration is 115,200 baud, 8N1 — identical to calling `Config::default()`.
+  </Step>
+  <Step title="Initialize the driver">
+    ```rust
+    let mut uart = Uart::new(peripherals.UART0, config)?
+        .with_rx(peripherals.GPIO3)
+        .with_tx(peripherals.GPIO1);
+    ```
+    RX and TX pins are assigned with builder methods.
+  </Step>
+</Steps>
+
+## Writing and reading
+
+```rust
+use embedded_io::Write;
+use embedded_io::Read;
+
+// Write a byte slice
+uart.write(b"Hello, world!\r\n")?;
+
+// Flush the transmit buffer
+uart.flush()?;
+
+// Read bytes (blocks until data is available)
+let mut buf = [0u8; 64];
+let n = uart.read(&mut buf)?;
+```
+
+`Uart` implements `embedded_io::Write` and `embedded_io::Read` from the `embedded-io` crate, making it compatible with drivers that use those traits.
+
+## Configuration options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `baudrate` | `u32` | `115_200` | Bits per second, up to 5,000,000 |
+| `data_bits` | `DataBits` | `_8` | 5, 6, 7, or 8 bits per frame |
+| `parity` | `Parity` | `None` | `None`, `Even`, or `Odd` |
+| `stop_bits` | `StopBits` | `_1` | `_1`, `_1p5`, or `_2` |
+
+Apply a new configuration at runtime:
+
+```rust
+uart.apply_config(&new_config)?;
+```
+
+## Splitting into Rx and Tx
+
+<Note>
+`UartRx` and `UartTx` are part of the `unstable` API.
+</Note>
+
+If you need to pass the transmitter and receiver to separate tasks, split the `Uart`:
+
+```rust
+let (rx, tx) = uart.split();
+
+// tx: UartTx — write-only half
+// rx: UartRx — read-only half
+```
+
+You can also construct a one-directional half directly:
+
+```rust
+use esp_hal::uart::{Config, UartTx, UartRx};
+
+let tx = UartTx::new(peripherals.UART1, Config::default())?
+    .with_tx(peripherals.GPIO4);
+
+let rx = UartRx::new(peripherals.UART0, Config::default())?
+    .with_rx(peripherals.GPIO3);
+```
+
+## Async UART
+
+Switch to async mode and use async read/write methods:
+
+```rust
+use embedded_io_async::Write;
+use embedded_io_async::Read;
+
+let mut uart = uart.into_async();
+
+// Async write
+uart.write(b"async hello\r\n").await?;
+uart.flush().await?;
+
+// Async read
+let mut buf = [0u8; 64];
+let n = uart.read(&mut buf).await?;
+```
+
+Call `uart.into_blocking()` to revert to blocking mode.
+
+## Error types
+
+| Error | Description |
+|-------|-------------|
+| `RxError::FifoOverflowed` | RX FIFO filled up; bytes were lost |
+| `RxError::GlitchOccurred` | Unexpected signal glitch on the RX line |
+| `RxError::FrameFormatViolated` | Received frame did not match the configured format |
+| `RxError::ParityMismatch` | Parity bit did not match |
+| `ConfigError::BaudrateNotSupported` | Baud rate is 0, exceeds 5 Mbaud, or can't be achieved |
+
+## LP UART
+
+<Note>
+LP UART requires the `unstable` feature flag.
+</Note>
+
+Some chips (ESP32-C5, ESP32-C6) include a Low-Power UART peripheral (`LP_UART`) that remains functional during light sleep. It shares the same `Config` structure but is instantiated from `peripherals.LP_UART`:
+
+```rust
+use esp_hal::uart::{Config, Uart};
+
+let lp_uart = Uart::new(peripherals.LP_UART, Config::default())?
+    .with_rx(peripherals.GPIO5)
+    .with_tx(peripherals.GPIO4);
+```
+
+LP UART supports a reduced set of baud rates compared to the main UART peripheral.
+
+## Chip availability
+
+UART is available on all supported chips. All chips expose at least UART0 and UART1; ESP32 and ESP32-S3 additionally provide UART2. LP UART is available on ESP32-C5 and ESP32-C6.

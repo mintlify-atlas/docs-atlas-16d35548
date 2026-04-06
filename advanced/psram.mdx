@@ -1,0 +1,129 @@
+---
+title: "PSRAM"
+description: "Use external pseudo-static RAM (PSRAM) connected via SPI/QSPI to expand the heap on ESP32, ESP32-S2, and ESP32-S3."
+---
+
+PSRAM (Pseudo-Static RAM, also called SPI RAM) is external RAM connected to the chip via a high-speed SPI or QSPI interface. It provides additional addressable memory that the CPU can access through the MMU cache, expanding available heap space well beyond the internal SRAM.
+
+<Note>
+  PSRAM support requires both the `psram` and `unstable` features. The `psram` feature enables the PSRAM driver; `unstable` is required because the `PsramSize` type and related APIs are not yet covered by semver guarantees.
+</Note>
+
+## Chip support
+
+PSRAM is available on the following chips:
+
+| Chip | PSRAM interface | Notes |
+|------|-----------------|-------|
+| ESP32 | Quad SPI (QSPI) | Supported |
+| ESP32-S2 | Quad SPI (QSPI) | Supported |
+| ESP32-S3 | Quad or Octal SPI | Quad by default; octal configurable via `ESP_HAL_CONFIG_PSRAM_MODE` |
+
+## Enabling PSRAM
+
+Add the `psram` and `unstable` features to your `Cargo.toml`:
+
+```toml
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["esp32s3", "psram", "unstable"] }
+```
+
+## PSRAM modes (ESP32-S3)
+
+The ESP32-S3 supports both quad and octal PSRAM modes. The mode is selected at build time via the `ESP_HAL_CONFIG_PSRAM_MODE` environment variable:
+
+```bash
+# Quad mode (default)
+ESP_HAL_CONFIG_PSRAM_MODE=quad cargo build
+
+# Octal mode (higher bandwidth, requires octal PSRAM hardware)
+ESP_HAL_CONFIG_PSRAM_MODE=octal cargo build
+```
+
+If you do not set `ESP_HAL_CONFIG_PSRAM_MODE`, quad mode is used.
+
+<Note>
+  Octal PSRAM requires hardware that physically supports octal SPI. Verify your board's PSRAM chip before enabling octal mode.
+</Note>
+
+## Initializing PSRAM and using it as heap memory
+
+The recommended way to use PSRAM is as additional heap memory via the `esp-alloc` crate. After calling `esp_alloc::psram_allocator!`, heap allocations that cannot fit in internal SRAM will be satisfied from PSRAM.
+
+<Steps>
+  <Step title="Add esp-alloc to your dependencies">
+    ```toml
+    [dependencies]
+    esp-alloc = "0.9"
+    ```
+  </Step>
+  <Step title="Initialize the PSRAM allocator in main">
+    ```rust
+    #![no_std]
+    #![no_main]
+
+    extern crate alloc;
+
+    use esp_hal::init;
+
+    #[esp_hal::main]
+    fn main() -> ! {
+        let peripherals = init(esp_hal::Config::default());
+
+        // Add PSRAM to the global allocator.
+        // peripherals.PSRAM is the PSRAM peripheral singleton.
+        esp_alloc::psram_allocator!(&peripherals.PSRAM, esp_hal::psram);
+
+        // Heap allocations now use PSRAM.
+        let mut large_vec: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(500 * 1024 / 4);
+        for i in 0..(500 * 1024 / 4) {
+            large_vec.push((i & 0xff) as u32);
+        }
+
+        let s = alloc::string::String::from("A string allocated in PSRAM");
+
+        loop {}
+    }
+    ```
+  </Step>
+</Steps>
+
+## Getting raw PSRAM pointers
+
+If you need direct access to the PSRAM address range rather than going through the allocator, use `psram_raw_parts`:
+
+```rust
+use esp_hal::psram::psram_raw_parts;
+
+let (ptr, size) = psram_raw_parts(&peripherals.PSRAM);
+// ptr: *mut u8 — start of the mapped PSRAM region
+// size: usize  — number of available bytes
+```
+
+<Warning>
+  PSRAM examples must be built in **release mode** (`cargo build --release`). Debug builds may be too slow for the PSRAM timing requirements and can produce incorrect results or fail to initialize.
+</Warning>
+
+## PSRAM configuration (ESP32-S3)
+
+On ESP32-S3, you can control PSRAM frequency and core clock timing via `PsramConfig`:
+
+```rust
+use esp_hal::psram::{PsramConfig, PsramSize, SpiRamFreq};
+
+let psram_config = PsramConfig {
+    size: PsramSize::AutoDetect,
+    ram_frequency: SpiRamFreq::Freq80m,
+    ..PsramConfig::default()
+};
+```
+
+`PsramSize::AutoDetect` (the default) probes the PSRAM chip at startup to determine its size. You can override it with `PsramSize::Size(n)` if you know the exact size in bytes.
+
+## ESP32 and ESP32-S2
+
+On ESP32 and ESP32-S2, PSRAM is always in quad SPI mode. Pass the PSRAM peripheral directly to the allocator macro:
+
+```rust
+esp_alloc::psram_allocator!(&peripherals.PSRAM, esp_hal::psram);
+```

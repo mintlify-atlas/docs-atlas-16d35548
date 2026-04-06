@@ -1,0 +1,256 @@
+---
+title: "Security & cryptography"
+description: "Hardware-accelerated cryptography in esp-hal: AES, SHA, RSA, ECC, HMAC, and eFuse access."
+---
+
+ESP32 chips include dedicated hardware accelerators for common cryptographic operations. Using these accelerators is significantly faster than software-only implementations and frees the CPU for other work.
+
+<Note>
+  All cryptographic accelerator drivers require the `unstable` feature. They are not yet covered by semver guarantees and may change in minor releases. See [Unstable APIs](/advanced/unstable-apis).
+</Note>
+
+## Accelerator availability by chip
+
+| Accelerator | ESP32 | ESP32-S2 | ESP32-S3 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-C2 |
+|-------------|-------|----------|----------|----------|----------|----------|----------|
+| AES | Yes | Yes | Yes | Yes | Yes | Yes | No |
+| SHA | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| RSA | Yes | Yes | Yes | Yes | Yes | Yes | No |
+| ECC | No | No | No | No | Yes | Yes | No |
+| HMAC | No | Yes | Yes | Yes | Yes | Yes | No |
+| eFuse | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+
+---
+
+<AccordionGroup>
+
+<Accordion title="AES — hardware AES encryption and decryption">
+
+The AES accelerator supports 128-bit and 256-bit keys (and 192-bit on some chips). It operates on 16-byte blocks and significantly outperforms software AES.
+
+**Basic (CPU-driven) usage:**
+
+```rust
+use esp_hal::aes::{Aes, Operation};
+
+let mut aes = Aes::new(peripherals.AES);
+
+// 16-byte key for AES-128
+let key: [u8; 16] = *b"SUp4SeCp@sSw0rd\0";
+
+// Prepare a 16-byte block (plaintext must be padded to 16 bytes)
+let mut block = [0u8; 16];
+let plaintext = b"hello esp-hal!!";
+block[..plaintext.len()].copy_from_slice(plaintext);
+
+// Encrypt in-place
+aes.encrypt(&mut block, key);
+
+// block now contains ciphertext
+
+// Decrypt in-place
+aes.decrypt(&mut block, key);
+
+// block now contains the original plaintext again
+```
+
+**Using block cipher modes (ECB, CBC, CTR, OFB, CFB8, CFB128):**
+
+For multi-block data or cipher modes, use `AesBackend` with `AesContext`:
+
+```rust
+use esp_hal::aes::{AesBackend, AesContext, Operation, cipher_modes::Ecb};
+
+let mut aes = AesBackend::new(peripherals.AES);
+// Start the backend — required before any AES operations.
+let _backend = aes.start();
+
+// Create an encryption context with ECB mode and a 128-bit key.
+let mut ecb_ctx = AesContext::new(Ecb, Operation::Encrypt, *b"SUp4SeCp@sSw0rd\0");
+
+let input:  [u8; 16] = *b"message\0\0\0\0\0\0\0\0\0";
+let mut output: [u8; 16] = [0; 16];
+
+// process() schedules the operation on the work queue.
+let handle = ecb_ctx.process(&input, &mut output).unwrap();
+handle.wait_blocking();
+
+// output contains the ciphertext.
+```
+
+For high-throughput applications on supported chips, `AesDmaBackend` offloads data transfer to DMA.
+
+</Accordion>
+
+<Accordion title="SHA — hardware hash acceleration">
+
+The SHA accelerator supports SHA-1, SHA-224, SHA-256, SHA-384, and SHA-512 (exact algorithm availability depends on the chip).
+
+**Using the `ShaBackend` / context API:**
+
+```rust
+use esp_hal::sha::{Sha1Context, ShaBackend};
+
+let mut sha = ShaBackend::new(peripherals.SHA);
+// Start the backend — required before any SHA operations.
+let _backend = sha.start();
+
+// Create a SHA-1 context.
+let mut sha1_ctx = Sha1Context::new();
+
+// SHA-1 produces a 20-byte digest.
+let mut digest = [0u8; 20];
+
+// Feed data incrementally.
+sha1_ctx.update(b"hello, ").wait_blocking();
+sha1_ctx.update(b"world!").wait_blocking();
+
+// Finalize to get the hash. This resets the context.
+sha1_ctx.finalize(&mut digest).wait_blocking();
+// digest now contains the SHA-1 hash.
+```
+
+**Using the `digest` crate traits:**
+
+The SHA contexts implement the standard `digest::Digest` trait, so you can use them with any library that accepts a `Digest` implementation:
+
+```rust
+use esp_hal::sha::Sha256Context;
+use esp_hal::sha::Digest; // re-exported from the `digest` crate
+
+let mut ctx = Sha256Context::new();
+digest::Digest::update(&mut ctx, b"input data");
+let hash = digest::Digest::finalize(ctx);
+```
+
+**Using the lower-level `Sha` driver:**
+
+```rust
+use esp_hal::sha::{Sha, Sha256};
+use nb::block;
+
+let mut sha = Sha::new(peripherals.SHA);
+let mut hasher = sha.start::<Sha256>();
+
+let mut data = b"HELLO, ESPRESSIF!".as_ref();
+let mut output = [0u8; 32];
+
+while !data.is_empty() {
+    data = block!(hasher.update(data)).unwrap();
+}
+block!(hasher.finish(output.as_mut_slice())).unwrap();
+// output contains the SHA-256 hash.
+```
+
+</Accordion>
+
+<Accordion title="RSA — hardware big-integer acceleration">
+
+The RSA accelerator supports modular exponentiation and multiplication for large key sizes. The maximum operand size depends on the chip — most support up to 4096-bit operands.
+
+The `Rsa` driver provides blocking and async operation modes:
+
+```rust
+use esp_hal::rsa::Rsa;
+
+// Blocking mode
+let mut rsa = Rsa::new(peripherals.RSA);
+
+// See the RSA examples in the esp-hal repository for full
+// key generation and signature verification patterns.
+```
+
+The RSA accelerator is intended for use with higher-level crates (e.g. `rsa`, `p256`) that perform the key management and padding. esp-hal provides the low-level modular arithmetic primitives.
+
+</Accordion>
+
+<Accordion title="ECC — Elliptic Curve Cryptography accelerator">
+
+The ECC accelerator is available on ESP32-C6 and ESP32-H2. It accelerates point multiplication and other elliptic curve operations, with support for curves such as NIST P-192 and P-256.
+
+```rust
+use esp_hal::ecc::Ecc;
+
+let mut ecc = Ecc::new(peripherals.ECC);
+// Use ecc.point_multiply(), ecc.verify(), etc.
+// See the ECC source and examples for the full operation API.
+```
+
+</Accordion>
+
+<Accordion title="HMAC — hardware HMAC with eFuse key storage">
+
+The HMAC accelerator computes HMAC-SHA-256 using a key stored in an eFuse key block. The key never leaves the hardware, which prevents software from reading it.
+
+**Upstream mode** (user supplies the message and reads the result):
+
+```rust
+use esp_hal::hmac::{Hmac, HmacPurpose, KeyId};
+
+let mut hmac = Hmac::new(peripherals.HMAC);
+
+// Begin computation using key slot 0, in upstream (user-accessible) mode.
+hmac.init_hmac(HmacPurpose::ToUser, KeyId::Key0).unwrap();
+
+let message = b"my authenticated message";
+nb::block!(hmac.update(message)).unwrap();
+
+let mut result = [0u8; 32];
+nb::block!(hmac.finalize(&mut result)).unwrap();
+// result contains the HMAC-SHA-256 output.
+```
+
+**Downstream mode** is used internally to re-enable soft-disabled JTAG or to derive keys for the Digital Signature peripheral — the result is routed directly to another hardware block and is not readable by software.
+
+</Accordion>
+
+<Accordion title="eFuse — chip ID, MAC address, and fused data">
+
+Every ESP32 chip has one-time-programmable eFuse fields that store the factory MAC address, chip revision, flash encryption keys, and other configuration data.
+
+**Reading the base MAC address:**
+
+```rust
+use esp_hal::efuse;
+
+let mac = efuse::base_mac_address();
+// mac implements Display as "aa:bb:cc:dd:ee:ff"
+println!("Base MAC: {mac}");
+println!("MAC bytes: {:02x?}", mac.as_bytes());
+```
+
+**Reading a per-interface MAC address** (Wi-Fi station, access point, Bluetooth):
+
+```rust
+use esp_hal::efuse::{self, InterfaceMacAddress};
+
+// Wi-Fi station MAC (equals the base MAC)
+let sta_mac = efuse::interface_mac_address(InterfaceMacAddress::Station);
+
+// Bluetooth MAC (derived from base MAC)
+let bt_mac = efuse::interface_mac_address(InterfaceMacAddress::Bluetooth);
+```
+
+**Reading the chip hardware revision:**
+
+```rust
+let rev = esp_hal::efuse::chip_revision();
+println!("Chip revision: {}.{}", rev.major, rev.minor);
+```
+
+**Reading arbitrary eFuse fields:**
+
+```rust
+use esp_hal::efuse::{read_field_le, EfuseField};
+
+// Read a specific eFuse field as a u8 (little-endian).
+let value: u8 = read_field_le(esp_hal::efuse::SOME_FIELD);
+```
+
+<Note>
+  eFuse fields are chip-specific. The available fields are defined in `esp_hal::efuse` and vary per chip. The `base_mac_address`, `chip_revision`, and related functions are available on all chips.
+</Note>
+
+</Accordion>
+
+</AccordionGroup>

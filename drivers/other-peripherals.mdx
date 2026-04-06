@@ -1,0 +1,453 @@
+---
+title: "Other peripherals"
+description: "Overview of additional ESP32 peripherals available in esp-hal: LEDC, I2S, TWAI/CAN, ADC, DAC, MCPWM, PCNT, temperature sensor, RNG, USB, ETM, and crypto accelerators."
+keywords: ["ledc", "i2s", "twai", "can", "adc", "dac", "mcpwm", "pcnt", "tsens", "rng", "usb", "etm", "esp32", "esp-hal"]
+---
+
+This page provides a quick-reference overview of peripherals beyond the core communication buses. Each section shows minimal usage and notes which chips support the peripheral and whether the `unstable` feature is required.
+
+<AccordionGroup>
+
+<Accordion title="LEDC — LED PWM Controller">
+
+LEDC generates PWM waveforms for LED brightness control, motor speed control, and signal generation. All chips support Low Speed channels; ESP32 additionally has High Speed channels.
+
+**Stability:** stable
+
+```rust
+use esp_hal::ledc::{
+    Ledc, LSGlobalClkSource, LowSpeed,
+    channel::{self, ChannelIFace},
+    timer::{self, TimerIFace},
+};
+use esp_hal::gpio::DriveMode;
+use esp_hal::time::Rate;
+
+let mut ledc = Ledc::new(peripherals.LEDC);
+ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
+
+// Configure a timer: 5-bit resolution, 24 kHz
+let mut lstimer0 = ledc.timer::<LowSpeed>(timer::Number::Timer0);
+lstimer0.configure(timer::config::Config {
+    duty: timer::config::Duty::Duty5Bit,
+    clock_source: timer::LSClockSource::APBClk,
+    frequency: Rate::from_khz(24),
+})?;
+
+// Bind a channel to a pin with 10% duty cycle
+let mut channel0 = ledc.channel(channel::Number::Channel0, peripherals.GPIO4);
+channel0.configure(channel::config::Config {
+    timer: &lstimer0,
+    duty_pct: 10,
+    drive_mode: DriveMode::PushPull,
+})?;
+```
+
+For smooth fading effects:
+
+```rust
+// Fade from 0% to 100% duty over 1000 ms, then back
+channel0.start_duty_fade(0, 100, 1000)?;
+while channel0.is_duty_fade_running() {}
+channel0.start_duty_fade(100, 0, 1000)?;
+while channel0.is_duty_fade_running() {}
+```
+
+</Accordion>
+
+<Accordion title="I2S — Digital Audio Interface">
+
+I2S transfers audio data between digital audio devices. esp-hal's I2S driver uses DMA for efficient data movement and supports TDM (Time Division Multiplexed) mode with Philips, MSB, and PCM standards.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** ESP32, ESP32-S2, ESP32-S3 (I2S0 and I2S1); ESP32-C3, ESP32-C6, ESP32-H2 (I2S0 only)
+
+```rust
+use esp_hal::i2s::master::{Channels, Config, DataFormat, I2s};
+use esp_hal::dma_buffers;
+use esp_hal::time::Rate;
+
+let (mut rx_buffer, rx_descriptors, _, _) = dma_buffers!(4 * 4092, 0);
+
+let i2s = I2s::new(
+    peripherals.I2S0,
+    peripherals.DMA_CH0,
+    Config::new_tdm_philips()
+        .with_sample_rate(Rate::from_hz(44100))
+        .with_data_format(DataFormat::Data16Channel16)
+        .with_channels(Channels::STEREO),
+)?;
+
+let mut i2s_rx = i2s.i2s_rx
+    .with_bclk(peripherals.GPIO1)
+    .with_ws(peripherals.GPIO2)
+    .with_din(peripherals.GPIO5)
+    .build(rx_descriptors);
+
+let mut transfer = i2s_rx.read_dma_circular(&mut rx_buffer)?;
+
+loop {
+    let avail = transfer.available()?;
+    if avail > 0 {
+        let mut buf = [0u8; 512];
+        transfer.pop(&mut buf[..avail])?;
+        // process audio samples
+    }
+}
+```
+
+<Note>Only TDM mode is currently supported. Standard I2S (non-TDM) is not yet implemented.</Note>
+
+</Accordion>
+
+<Accordion title="TWAI/CAN — Two-Wire Automotive Interface">
+
+TWAI is Espressif's implementation of the CAN bus protocol (ISO 11898-1). It supports Standard Frame Format (11-bit IDs) and Extended Frame Format (29-bit IDs), and requires an external CAN transceiver.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** All chips have TWAI0; ESP32-C6 and ESP32-S3 also have TWAI1.
+
+```rust
+use esp_hal::twai::{self, BaudRate, TwaiConfiguration, TwaiMode};
+use esp_hal::twai::filter::SingleStandardFilter;
+use nb::block;
+
+const BAUDRATE: twai::BaudRate = BaudRate::B500K;
+
+let mut config = TwaiConfiguration::new(
+    peripherals.TWAI0,
+    peripherals.GPIO3,  // RX
+    peripherals.GPIO2,  // TX
+    BAUDRATE,
+    TwaiMode::Normal,
+);
+
+// Accept only frames with IDs ending in 0
+config.set_filter(
+    const { SingleStandardFilter::new(b"xxxxxxxxxx0", b"x", [b"xxxxxxxx", b"xxxxxxxx"]) },
+);
+
+let mut twai = config.start();
+
+loop {
+    // Receive a frame
+    let frame = block!(twai.receive())?;
+    // Echo it back
+    block!(twai.transmit(&frame))?;
+}
+```
+
+</Accordion>
+
+<Accordion title="ADC — Analog-to-Digital Converter">
+
+The ADC measures analog voltages on supported pins and returns a 12-bit digital value. Input attenuation controls the effective voltage range.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** All chips. ESP32, S2, and S3 have ADC1 and ADC2; others have ADC1 only.
+
+```rust
+use esp_hal::analog::adc::{Adc, AdcConfig, Attenuation};
+
+let mut adc1_config = AdcConfig::new();
+
+// Enable a pin with 11 dB attenuation (~0–3.1 V measurement range)
+let mut pin = adc1_config.enable_pin(peripherals.GPIO2, Attenuation::_11dB);
+
+let mut adc1 = Adc::new(peripherals.ADC1, adc1_config);
+
+// Read a single sample (returns u16)
+let value: u16 = nb::block!(adc1.read_oneshot(&mut pin))?;
+```
+
+**Attenuation ranges** (approximate, see datasheet for your chip):
+
+| Attenuation | Effective range |
+|-------------|----------------|
+| `_0dB` | 0 – 0.8 V |
+| `_2p5dB` | 0 – 1.1 V |
+| `_6dB` | 0 – 1.35 V |
+| `_11dB` | 0 – 3.1 V |
+
+</Accordion>
+
+<Accordion title="DAC — Digital-to-Analog Converter">
+
+The DAC converts an 8-bit digital value (0–255) to an analog output voltage (0–Vref). It is available only on ESP32 and ESP32-S2.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** ESP32 (GPIO25, GPIO26), ESP32-S2 (GPIO17, GPIO18)
+
+```rust
+use esp_hal::analog::dac::Dac;
+
+// ESP32: DAC1 is on GPIO25, DAC2 is on GPIO26
+let mut dac1 = Dac::new(peripherals.DAC1, peripherals.GPIO25);
+
+// Write a value 0–255 (maps to 0–Vref)
+dac1.write(128); // ~50% of Vref
+```
+
+</Accordion>
+
+<Accordion title="MCPWM — Motor Control PWM">
+
+MCPWM is a versatile PWM generator designed for motor and power control applications. It includes 3 timers, 3 operators (each with two complementary outputs), and a fault-detection module.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** ESP32, ESP32-S3, ESP32-C6, ESP32-H2 (MCPWM0); ESP32 and ESP32-S3 also have MCPWM1.
+
+```rust
+use esp_hal::mcpwm::{
+    McPwm, PeripheralClockConfig,
+    operator::{PwmPinConfig, PWMStream},
+    timer::PwmWorkingMode,
+};
+use esp_hal::time::Rate;
+
+let clock_cfg = PeripheralClockConfig::with_frequency(Rate::from_mhz(40))?;
+let mut mcpwm = McPwm::new(peripherals.MCPWM0, clock_cfg);
+
+// Connect operator0 to timer0
+mcpwm.operator0.set_timer(&mcpwm.timer0);
+
+// Assign output pin to operator0's PWMxA output
+let mut pwm_pin = mcpwm
+    .operator0
+    .with_pin_a(peripherals.GPIO0, PwmPinConfig::UP_ACTIVE_HIGH);
+
+// Start timer: 0–99 range, 20 kHz
+let timer_cfg = clock_cfg
+    .timer_clock_with_frequency(99, PwmWorkingMode::Increase, Rate::from_khz(20))?;
+mcpwm.timer0.start(timer_cfg);
+
+// Set 50% duty cycle
+pwm_pin.set_timestamp(50);
+```
+
+</Accordion>
+
+<Accordion title="PCNT — Pulse Counter">
+
+PCNT counts rising and/or falling edges on input signals. Each unit has multiple channels with independent increment/decrement control, and is commonly used to decode quadrature encoders.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** ESP32, ESP32-S2, ESP32-S3, ESP32-C6, ESP32-H2
+
+```rust
+use esp_hal::pcnt::{channel, unit, Pcnt};
+use esp_hal::gpio::{Input, InputConfig, Pull};
+
+let mut pcnt = Pcnt::new(peripherals.PCNT);
+let u0 = pcnt.unit0;
+
+u0.set_low_limit(Some(-100))?;
+u0.set_high_limit(Some(100))?;
+u0.clear();
+
+let config = InputConfig::default().with_pull(Pull::Up);
+let pin_a = Input::new(peripherals.GPIO4, config);
+let pin_b = Input::new(peripherals.GPIO5, config);
+let input_a = pin_a.peripheral_input();
+let input_b = pin_b.peripheral_input();
+
+// Channel 0: increment on A rising when B is high, decrement when B is low
+let ch0 = &u0.channel0;
+ch0.set_edge_signal(input_a.clone());
+ch0.set_ctrl_signal(input_b.clone());
+ch0.set_input_mode(channel::EdgeMode::Increment, channel::EdgeMode::Decrement);
+ch0.set_ctrl_mode(channel::CtrlMode::Keep, channel::CtrlMode::Reverse);
+
+u0.resume();
+
+// Read current count
+let count = u0.counter.get();
+```
+
+</Accordion>
+
+<Accordion title="Temperature Sensor (TSENS)">
+
+The on-chip temperature sensor measures the internal die temperature, typically higher than ambient. Its range is –40 °C to 125 °C.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** ESP32-C3, ESP32-C5, ESP32-C6, ESP32-H2, ESP32-S2, ESP32-S3
+
+```rust
+use esp_hal::tsens::{Config, TemperatureSensor};
+use esp_hal::delay::Delay;
+
+let sensor = TemperatureSensor::new(peripherals.TSENS, Config::default())?;
+
+// Allow the sensor to stabilise
+let delay = Delay::new();
+delay.delay_micros(200);
+
+let temp = sensor.get_temperature();
+// temp.to_celsius() → f32 in degrees Celsius
+```
+
+<Note>Chip temperature is higher than ambient temperature due to self-heating. This sensor is not suitable for measuring ambient temperature.</Note>
+
+</Accordion>
+
+<Accordion title="RNG — Hardware Random Number Generator">
+
+The RNG peripheral generates random numbers. True randomness requires the Wi-Fi/Bluetooth RF subsystem or an ADC to be active; otherwise the output is pseudo-random.
+
+**Stability:** stable
+
+**Availability:** All chips
+
+```rust
+use esp_hal::rng::Rng;
+
+let rng = Rng::new();
+
+// Generate a random u32
+let rand_word: u32 = rng.random();
+
+// Fill a buffer with random bytes
+let mut buf = [0u8; 16];
+rng.read(&mut buf);
+```
+
+</Accordion>
+
+<Accordion title="USB Serial/JTAG">
+
+The USB Serial/JTAG peripheral provides a built-in USB-to-serial converter and JTAG adapter using only two pins. It is commonly used for `println!` output and flashing without an external programmer.
+
+**Stability:** stable
+
+**Availability:** ESP32-C3, ESP32-C5, ESP32-C6, ESP32-H2, ESP32-S3
+
+```rust
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
+
+let mut usb = UsbSerialJtag::new(peripherals.USB_DEVICE);
+
+// Write bytes (implements embedded-io Write)
+usb.write(b"Hello via USB!\r\n")?;
+usb.flush()?;
+```
+
+You can split it into independent TX and RX halves:
+
+```rust
+let (rx, tx) = usb.split();
+```
+
+</Accordion>
+
+<Accordion title="USB OTG — Full-Speed USB">
+
+USB OTG provides full USB host and device capability. It is available on ESP32-S2 and ESP32-S3.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** ESP32-S2, ESP32-S3
+
+The USB OTG peripheral on ESP32-S2 and ESP32-S3 is exposed through `peripherals.USB0`. Use it with the `esp-usb` crate or directly through the `otg_fs` module:
+
+```rust
+use esp_hal::otg_fs::Usb;
+
+let usb = Usb::new(peripherals.USB0, peripherals.GPIO20, peripherals.GPIO19);
+```
+
+The `usb` handle is then passed to a USB device stack such as `usb-device`.
+
+</Accordion>
+
+<Accordion title="ETM — Event Task Matrix">
+
+ETM lets peripherals trigger actions in other peripherals directly, without CPU involvement. This is useful for precisely timed cross-peripheral reactions with minimal latency.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** ESP32-C6, ESP32-H2, ESP32-S3, ESP32-C5
+
+```rust
+use esp_hal::etm::Etm;
+use esp_hal::gpio::etm::{Channels, InputConfig, OutputConfig};
+use esp_hal::gpio::{Level, Pull};
+
+// Create ETM-capable GPIO channels
+let gpio_ext = Channels::new(peripherals.GPIO_SD);
+
+// Task: toggle LED on GPIO1 when event fires
+let led_task = gpio_ext.channel0_task.toggle(
+    peripherals.GPIO1,
+    OutputConfig { open_drain: false, pull: Pull::None, initial_state: Level::Low },
+);
+
+// Event: falling edge on button GPIO9
+let button_event = gpio_ext
+    .channel0_event
+    .falling_edge(peripherals.GPIO9, InputConfig { pull: Pull::Up });
+
+// Connect event to task via ETM channel
+let etm = Etm::new(peripherals.ETM);
+let _ch = etm.channel0.setup(&button_event, &led_task);
+
+// LED now toggles on button press without any CPU interrupt
+loop {}
+```
+
+</Accordion>
+
+<Accordion title="Crypto Accelerators (SHA, AES, RSA, ECC)">
+
+ESP32 chips include hardware accelerators for common cryptographic operations. They speed up workloads that would otherwise be expensive in software on a microcontroller.
+
+**Stability:** requires `unstable` feature
+
+**Availability:** varies by chip
+
+| Peripheral | Chips |
+|-----------|-------|
+| SHA | All |
+| AES | ESP32, S2, S3, C3, C6, H2 |
+| RSA | ESP32, S2, S3 |
+| ECC | ESP32-C3, C5, C6, H2 |
+
+**SHA-256 example:**
+
+```rust
+use esp_hal::sha::{Sha, ShaMode};
+
+let mut sha = Sha::new(peripherals.SHA, ShaMode::SHA256);
+
+// Feed data in chunks
+sha.update(b"hello world").unwrap();
+
+// Finalise and retrieve the digest
+let mut digest = [0u8; 32];
+sha.finish(&mut digest).unwrap();
+```
+
+**AES-128 example:**
+
+```rust
+use esp_hal::aes::{Aes, Mode};
+
+let mut aes = Aes::new(peripherals.AES);
+
+let key   = [0u8; 16];
+let block = [0u8; 16];
+let mut cipher = [0u8; 16];
+
+aes.process(&mut cipher, &block, Mode::Encryption128, &key);
+```
+
+</Accordion>
+
+</AccordionGroup>

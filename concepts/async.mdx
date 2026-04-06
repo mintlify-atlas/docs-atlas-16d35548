@@ -1,0 +1,140 @@
+---
+title: "Async programming"
+description: "How to use esp-hal's async drivers with the Embassy executor for non-blocking peripheral access."
+---
+
+esp-hal provides **both blocking and async APIs** for all applicable peripherals. The two modes are represented by the `Blocking` and `Async` marker types. Drivers are constructed in blocking mode by default; you convert to async mode by calling `.into_async()`.
+
+<Note>
+  Async drivers require the `unstable` feature. The async API is not yet
+  stabilised and may change between releases.
+</Note>
+
+## Blocking vs async
+
+<Tabs>
+  <Tab title="Blocking">
+    Blocking drivers execute operations synchronously. The calling thread waits
+    until the operation completes before returning.
+
+    ```rust
+    use esp_hal::uart::{Config, Uart};
+
+    let mut uart = Uart::new(peripherals.UART0, Config::default())?
+        .with_rx(peripherals.GPIO1)
+        .with_tx(peripherals.GPIO2);
+
+    // Write returns the number of bytes written; may be less than input length.
+    let _written = uart.write(b"hello")?;
+
+    let mut buf = [0u8; 5];
+    // Read returns the number of bytes read into the buffer.
+    let _n = uart.read(&mut buf)?;
+    ```
+  </Tab>
+  <Tab title="Async">
+    Async drivers return futures that are driven by an executor. The current
+    task yields while the hardware works, allowing other tasks to run.
+
+    ```rust
+    use esp_hal::uart::{Config, Uart};
+
+    let mut uart = Uart::new(peripherals.UART0, Config::default())?
+        .with_rx(peripherals.GPIO1)
+        .with_tx(peripherals.GPIO2)
+        .into_async();
+
+    // Yields until bytes are written; returns number of bytes written.
+    let _written = uart.write_async(b"hello").await?;
+
+    let mut buf = [0u8; 5];
+    // Yields until bytes are available; returns number of bytes read.
+    let _n = uart.read_async(&mut buf).await?;
+    ```
+  </Tab>
+</Tabs>
+
+## Embassy integration
+
+esp-hal is designed to work with the [Embassy](https://embassy.dev) async executor. Embassy provides the task scheduler, timers, and channel primitives that complement esp-hal's async drivers.
+
+### Cargo.toml
+
+```toml
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
+embassy-executor = { version = "0.7", features = ["task-arena-size-20480"] }
+embassy-time = { version = "0.4" }
+```
+
+Adjust the chip feature (`esp32c6`, `esp32s3`, etc.) and the `task-arena-size-*` value to match your chip and application.
+
+### Entry point
+
+```rust
+#![no_std]
+#![no_main]
+
+use embassy_executor::Spawner;
+use esp_hal::{clock::CpuClock, main};
+
+#[main]
+async fn main(spawner: Spawner) {
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
+
+    // Spawn tasks using the Spawner handle.
+    spawner.spawn(my_task()).unwrap();
+}
+
+#[embassy_executor::task]
+async fn my_task() {
+    loop {
+        embassy_time::Timer::after_millis(500).await;
+        // do work
+    }
+}
+```
+
+## Converting between blocking and async
+
+A blocking driver can be converted to async with `.into_async()`, and back with `.into_blocking()`:
+
+```rust
+use esp_hal::uart::{Config, Uart};
+
+// Start blocking.
+let uart = Uart::new(peripherals.UART0, Config::default())?
+    .with_rx(peripherals.GPIO1)
+    .with_tx(peripherals.GPIO2);
+
+// Promote to async.
+let async_uart = uart.into_async();
+
+// Demote back to blocking.
+let blocking_uart = async_uart.into_blocking();
+```
+
+<Note>
+  When you call `.into_async()`, the driver installs internal interrupt handlers
+  that drive the async state machine. These handlers run on the same CPU core
+  where the driver was created. The driver therefore cannot be sent to another
+  core while in async mode. Calling `.into_blocking()` removes the internal
+  handlers and restores full portability.
+</Note>
+
+## `embedded-hal-async` traits
+
+Async drivers implement the traits defined in the
+[`embedded-hal-async`](https://docs.rs/embedded-hal-async) crate. This means
+they are compatible with any library written against those traits:
+
+| Peripheral | Trait |
+|------------|-------|
+| I2C master | `embedded_hal_async::i2c::I2c` |
+| SPI master | `embedded_hal_async::spi::SpiBus` |
+| UART | `embedded_io_async::Read` / `embedded_io_async::Write` |
+
+## Performance considerations
+
+Async operations carry a small overhead compared to their blocking equivalents because the executor must poll the future after each interrupt fires. For very short transfers the overhead can be significant. In those cases, consider using the blocking methods even on an async driver — they remain available on `Async`-mode drivers.

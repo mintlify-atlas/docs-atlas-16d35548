@@ -1,0 +1,230 @@
+---
+title: "Installation"
+description: "Set up your Rust toolchain and add esp-hal to your project"
+---
+
+Getting started with `esp-hal` requires a few steps beyond a standard Rust setup, because Espressif chips span two different CPU architectures. RISC-V chips (ESP32-C and H series) work with the standard Rust stable toolchain. Xtensa chips (ESP32, ESP32-S2, ESP32-S3) require a custom compiler fork, installed via `espup`.
+
+<Steps>
+
+<Step title="Install Rust">
+
+If you don't have Rust installed, install it with `rustup`:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Follow the on-screen instructions. Once complete, ensure `cargo` and `rustc` are on your `PATH`:
+
+```bash
+rustc --version
+cargo --version
+```
+
+`esp-hal` requires **Rust 1.88.0 or newer** (MSRV). The latest stable toolchain will always satisfy this requirement.
+
+</Step>
+
+<Step title="Set up your chip's toolchain">
+
+The setup differs depending on which chip family you are targeting.
+
+<Tabs>
+  <Tab title="RISC-V chips (C2, C3, C5, C6, C61, H2)">
+    RISC-V chips use standard Rust targets. Add the correct target for your chip using `rustup`:
+
+    ```bash
+    # ESP32-C2 and ESP32-C3
+    rustup target add riscv32imc-unknown-none-elf
+
+    # ESP32-C5, ESP32-C6, ESP32-C61, and ESP32-H2
+    rustup target add riscv32imac-unknown-none-elf
+    ```
+
+    No additional toolchain is required — the standard Rust stable toolchain is sufficient.
+  </Tab>
+  <Tab title="Xtensa chips (ESP32, S2, S3)">
+    Xtensa chips require a custom Rust compiler that is not included in the standard Rust distribution. Install `espup` to manage this for you:
+
+    ```bash
+    cargo install espup
+    espup install
+    ```
+
+    `espup install` downloads and configures the `esp` toolchain, which includes the Xtensa-enabled `rustc`, along with the correct LLVM version and the Xtensa targets:
+
+    - `xtensa-esp32-none-elf`
+    - `xtensa-esp32s2-none-elf`
+    - `xtensa-esp32s3-none-elf`
+
+    After installation, source the generated environment file to activate the toolchain in your current shell:
+
+    ```bash
+    # On Linux/macOS (bash/zsh)
+    . $HOME/export-esp.sh
+
+    # On Fish shell
+    . $HOME/export-esp.fish
+    ```
+
+    <Tip>
+      Add the `source` line to your shell's startup file (`.bashrc`, `.zshrc`, etc.) so the toolchain is always available.
+    </Tip>
+  </Tab>
+</Tabs>
+
+</Step>
+
+<Step title="Install cargo-espflash">
+
+`cargo-espflash` is the recommended tool for flashing firmware to your ESP device and monitoring its serial output:
+
+```bash
+cargo install cargo-espflash
+```
+
+Verify the installation:
+
+```bash
+cargo espflash --version
+```
+
+</Step>
+
+<Step title="Create a new project">
+
+The recommended way to start a new `esp-hal` project is with `esp-generate`, the official project generator. See the [Quickstart](/quickstart) guide for a full walkthrough using `esp-generate`.
+
+If you prefer to add `esp-hal` manually to an existing Cargo project, continue with the steps below.
+
+</Step>
+
+<Step title="Add esp-hal to Cargo.toml">
+
+Add `esp-hal` as a dependency and enable exactly **one** chip feature matching your target device:
+
+```toml Cargo.toml
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["esp32c6"] }
+```
+
+<Warning>
+  You must enable **exactly one** chip feature. Enabling multiple chip features
+  (e.g., both `esp32c6` and `esp32c3`) will cause a compilation error. The
+  available chip features are: `esp32`, `esp32c2`, `esp32c3`, `esp32c5`,
+  `esp32c6`, `esp32c61`, `esp32h2`, `esp32s2`, `esp32s3`.
+</Warning>
+
+The chip features map to devices as follows:
+
+<Tabs>
+  <Tab title="RISC-V chips">
+    ```toml Cargo.toml
+    [dependencies]
+    # ESP32-C2
+    esp-hal = { version = "1.0.0", features = ["esp32c2"] }
+
+    # ESP32-C3
+    esp-hal = { version = "1.0.0", features = ["esp32c3"] }
+
+    # ESP32-C5
+    esp-hal = { version = "1.0.0", features = ["esp32c5"] }
+
+    # ESP32-C6
+    esp-hal = { version = "1.0.0", features = ["esp32c6"] }
+
+    # ESP32-C61
+    esp-hal = { version = "1.0.0", features = ["esp32c61"] }
+
+    # ESP32-H2
+    esp-hal = { version = "1.0.0", features = ["esp32h2"] }
+    ```
+  </Tab>
+  <Tab title="Xtensa chips">
+    ```toml Cargo.toml
+    [dependencies]
+    # ESP32
+    esp-hal = { version = "1.0.0", features = ["esp32"] }
+
+    # ESP32-S2
+    esp-hal = { version = "1.0.0", features = ["esp32s2"] }
+
+    # ESP32-S3
+    esp-hal = { version = "1.0.0", features = ["esp32s3"] }
+    ```
+  </Tab>
+</Tabs>
+
+To also enable unstable (in-development) drivers and APIs, add the `unstable` feature:
+
+```toml Cargo.toml
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
+```
+
+</Step>
+
+<Step title="Configure .cargo/config.toml">
+
+Every embedded Rust project needs a `.cargo/config.toml` file that tells Cargo which target to compile for and how to build the binary. Create `.cargo/config.toml` in the root of your project:
+
+<Tabs>
+  <Tab title="RISC-V (e.g. ESP32-C6)">
+    ```toml .cargo/config.toml
+    [build]
+    target = "riscv32imac-unknown-none-elf"
+
+    [target.riscv32imac-unknown-none-elf]
+    rustflags = [
+      "-C", "link-arg=-Tlinkall.x",
+    ]
+
+    [unstable]
+    build-std = ["core"]
+    ```
+  </Tab>
+  <Tab title="Xtensa (e.g. ESP32-S3)">
+    ```toml .cargo/config.toml
+    [build]
+    target = "xtensa-esp32s3-none-elf"
+
+    [target.xtensa-esp32s3-none-elf]
+    rustflags = [
+      "-C", "link-arg=-Tlinkall.x",
+    ]
+
+    [unstable]
+    build-std = ["core"]
+    ```
+
+    Additionally, specify the `esp` toolchain in `rust-toolchain.toml` at the root of your project:
+
+    ```toml rust-toolchain.toml
+    [toolchain]
+    channel = "esp"
+    ```
+  </Tab>
+  <Tab title="RISC-V (e.g. ESP32-C3)">
+    ```toml .cargo/config.toml
+    [build]
+    target = "riscv32imc-unknown-none-elf"
+
+    [target.riscv32imc-unknown-none-elf]
+    rustflags = [
+      "-C", "link-arg=-Tlinkall.x",
+    ]
+
+    [unstable]
+    build-std = ["core"]
+    ```
+  </Tab>
+</Tabs>
+
+</Step>
+
+</Steps>
+
+## What's next?
+
+With your toolchain and project set up, head to the [Quickstart](/quickstart) to build and flash your first firmware binary.

@@ -1,0 +1,113 @@
+---
+title: "Clock configuration"
+description: "How to configure the CPU clock and understand the esp-hal clock system."
+---
+
+ESP32 chips derive their clocks from a combination of oscillators (XTAL, RC) and PLL circuits. esp-hal exposes a simple interface for configuring the CPU clock speed; peripheral clocks are derived automatically.
+
+## Configuring the CPU clock
+
+You set the CPU clock speed through `esp_hal::Config` before calling `init()`. The `CpuClock` enum provides the available presets for your chip.
+
+```rust
+use esp_hal::clock::CpuClock;
+
+let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+let peripherals = esp_hal::init(config);
+```
+
+`CpuClock::max()` selects the highest frequency supported by the target chip. You can also specify an exact speed using one of the named variants.
+
+### `CpuClock` variants
+
+The available variants depend on the chip you are targeting. The table below summarises what each chip supports:
+
+| Chip | Available speeds |
+|------|-----------------|
+| ESP32, ESP32-S2, ESP32-S3 | `_80MHz`, `_160MHz`, `_240MHz` |
+| ESP32-C2 | `_80MHz`, `_120MHz` |
+| ESP32-C3, ESP32-C6, ESP32-C61 | `_80MHz`, `_160MHz` |
+| ESP32-H2 | `_96MHz` |
+| ESP32-C5 | `_80MHz`, `_160MHz`, `_240MHz` |
+
+`CpuClock::max()` resolves at compile time to the highest variant for your chip:
+
+- `_240MHz` on ESP32, ESP32-S2, ESP32-S3, ESP32-C5
+- `_160MHz` on ESP32-C3, ESP32-C6, ESP32-C61
+- `_120MHz` on ESP32-C2
+- `_96MHz` on ESP32-H2
+
+<Tip>
+  When in doubt, use `CpuClock::max()`. It gives the best performance and is the
+  most widely tested configuration. You can reduce clock speed later to lower
+  power consumption.
+</Tip>
+
+### Using `CpuClock::default()`
+
+`CpuClock` implements `Default`, which resolves to `_80MHz` on all chips. If you do not call `with_cpu_clock()`, the default configuration applies `_80MHz`.
+
+```rust
+// These two are equivalent:
+let peripherals = esp_hal::init(esp_hal::Config::default());
+
+let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz);
+let peripherals = esp_hal::init(config);
+```
+
+## Peripheral clocks
+
+Once `init()` returns, the clock configuration is **frozen** and cannot be changed at runtime. Peripheral clocks (APB clock, XTAL clock, etc.) are derived automatically from the CPU clock configuration you choose. You do not need to configure them manually for normal use.
+
+The `esp_hal::clock` module exposes helper functions to read the active clock frequencies at runtime:
+
+```rust
+use esp_hal::clock;
+
+let cpu_freq = clock::cpu_clock();  // Returns a `Rate`
+let xtal_freq = clock::xtal_clock(); // Returns a `Rate`
+```
+
+## The `Clocks` struct
+
+The internal `Clocks` struct (available behind the `unstable` feature) tracks the active frequencies after `init()` completes. You can read it via `Clocks::get()`:
+
+```rust
+#[cfg(feature = "unstable")]
+{
+    use esp_hal::clock::Clocks;
+    let clocks = Clocks::get();
+    // clocks.cpu_clock — CPU frequency as a Rate
+    // clocks.apb_clock — APB bus frequency
+    // clocks.xtal_clock — Crystal oscillator frequency
+}
+```
+
+<Note>
+  `Clocks` and `ClockConfig` are marked `unstable`. Their fields and the
+  low-level clock tree API can change without notice. For most applications,
+  `CpuClock` and `Config::with_cpu_clock()` are the only APIs you need.
+</Note>
+
+## Advanced clock configuration
+
+The `unstable` feature exposes a `ClockConfig` type that gives low-level control over every node in the clock tree, including PLL settings, dividers, and clock source selection. This is intended for driver authors and power-management use cases.
+
+```rust
+#[cfg(feature = "unstable")]
+{
+    use esp_hal::clock::ClockConfig;
+
+    // ClockConfig can be passed directly to with_cpu_clock()
+    // when the `unstable` feature is enabled.
+    let config = esp_hal::Config::default()
+        .with_cpu_clock(ClockConfig::default());
+    let peripherals = esp_hal::init(config);
+}
+```
+
+<Warning>
+  Low-level clock reconfiguration can render the device temporarily unusable.
+  The `esp_hal::clock::ll` module is explicitly marked experimental. Use the
+  `CpuClock` presets unless you have a specific reason to go lower level.
+</Warning>

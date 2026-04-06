@@ -1,0 +1,169 @@
+---
+title: "esp-println"
+description: "Provides print!, println!, and dbg! macros plus logging integration for all ESP32 family devices."
+---
+
+`esp-println` gives you `print!`, `println!`, and `dbg!` in `no_std` programs, along with optional integration with the `log` crate and `defmt`. It supports every Espressif ESP32 family device and multiple output backends.
+
+## Adding to your project
+
+Add `esp-println` to your `Cargo.toml`, selecting your target chip:
+
+```toml
+[dependencies]
+esp-println = { version = "0.16.1", features = ["esp32c6"] }
+```
+
+The available chip features are: `esp32`, `esp32c2`, `esp32c3`, `esp32c5`, `esp32c6`, `esp32c61`, `esp32h2`, `esp32s2`, `esp32s3`.
+
+## Basic usage
+
+```rust
+use esp_println::println;
+
+fn main() {
+    println!("Hello, ESP32!");
+    println!("Value: {}", 42);
+}
+```
+
+The `print!`, `println!`, and `dbg!` macros work exactly like their standard library counterparts.
+
+<Note>
+  If you don't call any `esp_println` macros directly but still want the global logger to be linked (e.g. you only use the `log` integration), add `use esp_println as _;` to your imports to prevent the linker from removing it.
+</Note>
+
+## Output backends
+
+`esp-println` supports several output backends, selected via Cargo features. By default it uses `auto`, which detects the best interface at runtime.
+
+<Tabs>
+  <Tab title="auto (default)">
+    Automatically selects the best output interface at runtime. On chips with USB Serial/JTAG hardware it prefers that; otherwise it falls back to UART0.
+
+    ```toml
+    esp-println = { version = "0.16.1", features = ["esp32c6"] }
+    # "auto" is included in the default features
+    ```
+
+    <Warning>
+      Some boards (e.g. Waveshare ESP32-C6-DEV-KIT-N8) include a USB hub that can confuse auto-detection. If you see no output, select an explicit backend instead.
+    </Warning>
+  </Tab>
+  <Tab title="UART">
+    Always uses UART0. Available on all devices.
+
+    ```toml
+    esp-println = { version = "0.16.1", default-features = false, features = ["esp32c6", "uart"] }
+    ```
+  </Tab>
+  <Tab title="USB Serial/JTAG">
+    Uses the built-in USB Serial/JTAG peripheral. Available on ESP32-C3, ESP32-C5, ESP32-C6, ESP32-C61, ESP32-H2, and ESP32-S3.
+
+    ```toml
+    esp-println = { version = "0.16.1", default-features = false, features = ["esp32c6", "jtag-serial"] }
+    ```
+  </Tab>
+  <Tab title="no-op">
+    Compiles out all print calls entirely, useful for production builds where you want zero overhead.
+
+    ```toml
+    esp-println = { version = "0.16.1", default-features = false, features = ["esp32c6", "no-op"] }
+    ```
+  </Tab>
+</Tabs>
+
+## Logging with the `log` crate
+
+Enable the `log-04` feature to integrate with the [`log`](https://crates.io/crates/log) crate:
+
+```toml
+[dependencies]
+log = "0.4"
+esp-println = { version = "0.16.1", features = ["esp32c6", "log-04"] }
+```
+
+Then initialize the logger in `main`:
+
+```rust
+use log::{info, warn, error};
+
+fn main() {
+    // Initialize with a static log level
+    esp_println::logger::init_logger(log::LevelFilter::Info);
+
+    info!("Device started");
+    warn!("Low memory");
+    error!("Something went wrong: {}", 42);
+}
+```
+
+To configure the log level at runtime via an environment variable, use `init_logger_from_env`:
+
+```rust
+// Reads the ESP_LOG environment variable, e.g.:
+//   ESP_LOG=debug cargo run
+// or per-module: ESP_LOG=warn,my_app::sensor=debug
+esp_println::logger::init_logger_from_env();
+```
+
+The `ESP_LOG` variable accepts a similar format to `RUST_LOG` but without regex support. For example:
+
+```
+ESP_LOG=warn,my_module=info,my_module::submodule=debug
+```
+
+<Tip>
+  Enable the `colors` feature (on by default) to get color-coded log output by severity level in the terminal.
+</Tip>
+
+## Logging with `defmt`
+
+For binary logging using [defmt](https://defmt.ferrous-systems.com/), enable the `defmt-espflash` feature:
+
+```toml
+[dependencies]
+defmt = "1.0"
+esp-println = { version = "0.16.1", default-features = false, features = ["esp32c6", "defmt-espflash"] }
+```
+
+`esp-println` installs the defmt global logger automatically. The output uses rzCOBS encoding and is framed so it can coexist with regular `println!` output. You need `espflash` to decode the defmt stream:
+
+```bash
+espflash flash --monitor --log-format defmt target/.../my-app
+```
+
+<Note>
+  The `defmt-espflash` and `log-04` features are mutually exclusive — you can only use one logging framework at a time.
+</Note>
+
+## Timestamps in log output
+
+Enable the `timestamp` feature to include millisecond timestamps in log messages. You must provide a `_esp_println_timestamp` function:
+
+```toml
+esp-println = { version = "0.16.1", features = ["esp32c6", "log-04", "timestamp"] }
+```
+
+```rust
+#[unsafe(no_mangle)]
+pub extern "Rust" fn _esp_println_timestamp() -> u64 {
+    esp_hal::time::Instant::now()
+        .duration_since_epoch()
+        .as_millis()
+}
+```
+
+## Feature flags
+
+| Feature            | Default | Description                                                         |
+|--------------------|---------|---------------------------------------------------------------------|
+| `auto`             | yes     | Auto-detect the best output interface at runtime                    |
+| `uart`             | no      | Always use UART0                                                    |
+| `jtag-serial`      | no      | Use USB Serial/JTAG (C3, C5, C6, C61, H2, S3 only)                 |
+| `no-op`            | no      | Discard all output (zero overhead)                                  |
+| `log-04`           | no      | Integrate with the `log` 0.4 crate                                  |
+| `defmt-espflash`   | no      | Install a defmt global logger (rzCOBS encoded)                      |
+| `colors`           | yes     | Color-code log severity levels in terminal output                   |
+| `critical-section` | yes     | Wrap print calls in a critical section for consistent output        |
+| `timestamp`        | no      | Prepend millisecond timestamps to log messages                      |

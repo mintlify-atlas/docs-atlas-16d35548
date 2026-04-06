@@ -1,80 +1,197 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Generate a project, write a blinky, and flash your first ESP32 firmware in minutes"
 ---
 
-## Get started in three steps
+The fastest way to start a new `esp-hal` project is with `esp-generate`, the official project scaffold tool. It generates a ready-to-build project with the correct toolchain configuration, linker scripts, and dependencies for your chosen chip.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, complete the [Installation](/installation) guide to set up your Rust toolchain and `cargo-espflash`.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+## Create your project
 
-### Step 2: Deploy your changes
+<Steps>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<Step title="Install esp-generate">
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+Install the `esp-generate` tool from crates.io:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+```bash
+cargo install esp-generate
+```
 
-### Step 3: Go live
+</Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+<Step title="Generate a new project">
+
+Run `esp-generate` with the `--chip` flag set to your target device. This example targets the ESP32-C6, but you can substitute any supported chip name:
+
+```bash
+esp-generate --chip=esp32c6 my-project
+```
+
+The generator will ask a few questions about optional features (Embassy async runtime, logging backend, etc.). For a basic blinky you can accept the defaults.
+
+The generated project includes:
+
+- A configured `Cargo.toml` with the correct `esp-hal` dependency and chip feature
+- A `.cargo/config.toml` with the right build target and linker flags
+- A `rust-toolchain.toml` (for Xtensa chips)
+- A minimal `src/main.rs` entry point
+
+<Tip>
+  To see all available chips and generator options, run:
+
+  ```bash
+  esp-generate --help
+  ```
+</Tip>
+
+</Step>
+
+<Step title="Understand the blinky example">
+
+Open `src/main.rs` in the generated project. A minimal blinky looks like this:
+
+```rust src/main.rs
+#![no_std]
+#![no_main]
+
+use esp_hal::{
+    clock::CpuClock,
+    gpio::{Level, Output, OutputConfig},
+    main,
+    time::{Duration, Instant},
+};
+
+// A panic handler is required for no_std binaries.
+// esp_backtrace provides a more detailed handler; this minimal version
+// performs a software reset on panic.
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    esp_hal::system::software_reset()
+}
+
+#[main]
+fn main() -> ! {
+    // Configure the system and set the CPU clock to the maximum frequency
+    // supported by this chip.
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+
+    // Initialize the HAL. This configures clocks, disables the watchdog
+    // timers, and returns a `Peripherals` struct that gives you ownership
+    // of every peripheral on the chip.
+    let peripherals = esp_hal::init(config);
+
+    // Configure GPIO0 as a push-pull output and drive it high initially.
+    let mut led = Output::new(peripherals.GPIO0, Level::High, OutputConfig::default());
+
+    loop {
+        // Toggle the LED output between high and low.
+        led.toggle();
+
+        // Busy-wait for 500 ms using the HAL's monotonic time API.
+        let delay_start = Instant::now();
+        while delay_start.elapsed() < Duration::from_millis(500) {}
+    }
+}
+```
+
+Here is what each part does:
+
+| Part | Purpose |
+| :--- | :------ |
+| `#![no_std]` | Disables the Rust standard library. Only `core` is available. |
+| `#![no_main]` | Removes the standard `main` entry point. The `#[main]` macro from `esp-hal` defines the real entry point. |
+| `#[panic_handler]` | Required by `no_std`. Called when the program panics. `software_reset()` reboots the chip. |
+| `esp_hal::init(config)` | Initializes clocks, disables watchdog timers, and returns peripheral singletons. **Call this exactly once**, at the top of `main`. |
+| `CpuClock::max()` | Sets the CPU to its highest supported frequency for the selected chip. |
+| `Output::new(...)` | Configures a GPIO pin as a digital output. `peripherals.GPIO0` is the peripheral singleton for pin 0. |
+| `led.toggle()` | Flips the output state between high and low. |
+| `Instant::now()` and `Duration` | Monotonic time primitives from `esp_hal::time`. Used here to implement a non-blocking 500 ms delay without requiring a timer peripheral. |
+
+<Note>
+  Each peripheral singleton (like `peripherals.GPIO0`) can only be passed to one driver at a time. If you need to share a peripheral across multiple parts of your code, use the `reborrow()` method to create a shorter-lived handle without giving up ownership.
+</Note>
+
+</Step>
+
+<Step title="Build the firmware">
+
+Compile the project in release mode. Debug builds are significantly slower and can cause timing issues with hardware peripherals:
+
+```bash
+cargo build --release
+```
+
+The compiled ELF binary will be at `target/<your-target>/release/my-project`.
+
+<Warning>
+  Always use `--release` when building firmware for real hardware. The `dev`
+  profile can be one or more orders of magnitude slower and may cause timing
+  failures with peripherals.
+</Warning>
+
+</Step>
+
+<Step title="Flash and monitor">
+
+Connect your ESP32 board via USB, then flash and open the serial monitor in a single command:
+
+```bash
+cargo espflash flash --release --monitor
+```
+
+`cargo-espflash` will auto-detect the connected device's serial port, flash the firmware, and open a serial monitor. Press `Ctrl+R` to reset the device and `Ctrl+C` to exit the monitor.
+
+If you have multiple devices connected, specify the port explicitly:
+
+```bash
+cargo espflash flash --release --monitor --port /dev/ttyUSB0
+```
+
+</Step>
+
+</Steps>
+
+## Explore more examples
+
+The `esp-hal` repository contains a large collection of examples covering every supported peripheral. Browse them at [github.com/esp-rs/esp-hal/tree/main/examples](https://github.com/esp-rs/esp-hal/tree/main/examples).
+
+<Tip>
+  The repository uses `cargo xtask` to manage building, running, and testing
+  examples across all supported chips. From the repository root, run the
+  following to see available commands:
+
+  ```bash
+  cargo xtask help
+  ```
+
+  For example, to run the `blinky` example on an ESP32-C6:
+
+  ```bash
+  cargo xtask run --chip esp32c6 blinky
+  ```
+
+  When browsing examples on GitHub, always use the tag for the `esp-hal`
+  version you have installed (e.g., `esp-hal-v1.0.0`) rather than `main`, as
+  APIs on `main` may have changed since the last release.
+</Tip>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core concepts" icon="puzzle-piece" href="/concepts/peripherals">
+    Learn how peripheral singletons, blocking mode, and async mode work.
+  </Card>
+  <Card title="GPIO driver" icon="toggle-on" href="/drivers/gpio">
+    Configure pins as inputs, outputs, and interrupt sources.
+  </Card>
+  <Card title="Async with Embassy" icon="bolt" href="/concepts/async">
+    Use the Embassy async runtime for concurrent peripheral access.
+  </Card>
+  <Card title="All examples on GitHub" icon="github" href="https://github.com/esp-rs/esp-hal/tree/main/examples">
+    Browse the full examples directory for every peripheral.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

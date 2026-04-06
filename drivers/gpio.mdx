@@ -1,0 +1,183 @@
+---
+title: "GPIO"
+description: "Configure and use GPIO pins as digital inputs and outputs on ESP32 microcontrollers using esp-hal."
+keywords: ["gpio", "input", "output", "interrupt", "esp32", "esp-hal", "embedded rust"]
+---
+
+GPIO is available on all ESP32 chips. Every pin can be used as a general-purpose digital input or output, or connected to an internal peripheral signal such as SPI, I2C, or UART.
+
+## Driver types
+
+esp-hal provides three main GPIO driver types:
+
+| Type | Description |
+|------|-------------|
+| `Output` | Push-pull or open-drain digital output |
+| `Input` | Digital input with optional pull-up/pull-down |
+| `Flex` | Flexible driver that can switch between input and output at runtime |
+
+## Output pins
+
+Create an output pin with an initial level and an `OutputConfig`:
+
+```rust
+use esp_hal::gpio::{Level, Output, OutputConfig};
+
+let mut led = Output::new(peripherals.GPIO5, Level::High, OutputConfig::default());
+```
+
+The `OutputConfig` controls the drive mode, drive strength, and pull resistors. The default is push-pull, 20 mA drive strength, and no pull resistors.
+
+### Controlling output level
+
+```rust
+led.set_high();
+led.set_low();
+led.toggle();
+led.set_level(Level::High);
+```
+
+To read back the level you have set (not the actual pin voltage):
+
+```rust
+let is_high: bool = led.is_set_high();
+let is_low:  bool = led.is_set_low();
+let level:   Level = led.output_level();
+```
+
+### Open-drain output
+
+Open-drain mode lets the pin actively pull low but leaves high floating, requiring an external pull-up resistor:
+
+```rust
+use esp_hal::gpio::{DriveMode, OutputConfig};
+
+let config = OutputConfig::default().with_drive_mode(DriveMode::OpenDrain);
+let mut pin = Output::new(peripherals.GPIO4, Level::High, config);
+```
+
+## Input pins
+
+Create an input pin using `Input::new` and an `InputConfig`:
+
+```rust
+use esp_hal::gpio::{Input, InputConfig, Pull};
+
+// Pull-up: pin reads high by default; button pulls it low
+let config = InputConfig::default().with_pull(Pull::Up);
+let button = Input::new(peripherals.GPIO5, config);
+```
+
+Available pull settings are `Pull::Up`, `Pull::Down`, and `Pull::None`.
+
+### Reading input level
+
+```rust
+let is_high: bool = button.is_high();
+let is_low:  bool = button.is_low();
+let level:   Level = button.level();
+```
+
+## GPIO interrupts
+
+<Note>
+GPIO interrupts require the `unstable` feature flag in `Cargo.toml`. You must also construct an `Io` handle from `IO_MUX` to register an interrupt handler.
+</Note>
+
+To receive interrupts, set up an `Io` handle and register a handler, then call `listen` on the input pin:
+
+```rust
+use esp_hal::gpio::{Event, Input, InputConfig, Io, Pull};
+
+// Initialize the Io handle — required to configure interrupt handling.
+let mut io = Io::new(peripherals.IO_MUX);
+io.set_interrupt_handler(my_handler);
+
+let config = InputConfig::default().with_pull(Pull::Up);
+let mut button = Input::new(peripherals.GPIO5, config);
+
+// Enable interrupt on falling edge (button pressed)
+button.listen(Event::FallingEdge);
+```
+
+The `Event` enum provides:
+
+| Variant | Triggers when |
+|---------|---------------|
+| `RisingEdge` | Pin transitions low → high |
+| `FallingEdge` | Pin transitions high → low |
+| `AnyEdge` | Either transition |
+| `LowLevel` | Pin is low (fires continuously) |
+| `HighLevel` | Pin is high (fires continuously) |
+
+<Warning>
+`LowLevel` and `HighLevel` events fire continuously while the condition holds. Call `unlisten()` inside the interrupt handler to stop them.
+</Warning>
+
+Inside the handler, check whether the interrupt is pending and clear it:
+
+```rust
+use core::cell::RefCell;
+use critical_section::Mutex;
+use esp_hal::gpio::Input;
+
+static BUTTON: Mutex<RefCell<Option<Input>>> = Mutex::new(RefCell::new(None));
+
+#[esp_hal::handler]
+fn my_handler() {
+    critical_section::with(|cs| {
+        if let Some(button) = BUTTON.borrow_ref_mut(cs).as_mut() {
+            if button.is_interrupt_set() {
+                // handle the event
+                button.unlisten();
+            }
+        }
+    });
+}
+```
+
+## Async GPIO (wait for level change)
+
+<Note>
+Async GPIO requires both the `unstable` feature flag and an async executor such as Embassy.
+</Note>
+
+In async code you can await a pin event without polling:
+
+```rust
+use esp_hal::gpio::{Input, InputConfig, Pull};
+
+let config = InputConfig::default().with_pull(Pull::Up);
+let mut button = Input::new(peripherals.GPIO5, config);
+
+// Suspend the task until the pin goes low
+button.wait_for_low().await;
+
+// Or wait for a specific edge
+button.wait_for_falling_edge().await;
+button.wait_for_rising_edge().await;
+button.wait_for_any_edge().await;
+```
+
+These methods are provided on both `Input` and `Flex`. They disable listening once the event fires, so they are **not** cancellation-safe — they always wait for the next occurrence.
+
+## Type erasure with AnyPin
+
+When you need a collection of pins with different numbers, erase their types using `Pin::degrade`:
+
+```rust
+use esp_hal::gpio::{AnyPin, Level, Output, OutputConfig, Pin};
+
+let pins: [AnyPin; 2] = [
+    peripherals.GPIO4.degrade(),
+    peripherals.GPIO5.degrade(),
+];
+
+let mut outputs: [Output; 2] = pins.map(|p| {
+    Output::new(p, Level::Low, OutputConfig::default())
+});
+```
+
+## Chip availability
+
+GPIO is available on all supported chips: ESP32, ESP32-S2, ESP32-S3, ESP32-C2, ESP32-C3, ESP32-C5, ESP32-C6, ESP32-H2.

@@ -1,0 +1,115 @@
+---
+title: "Peripheral model"
+description: "How esp-hal models hardware peripherals as owned singletons, and how to use ownership and reborrowing to share them."
+---
+
+esp-hal represents every hardware peripheral as a **unique type** — a singleton. You cannot construct one yourself; the only way to get one is from the return value of `esp_hal::init()`. This design makes peripheral access statically safe: the compiler enforces that no two drivers can simultaneously own the same hardware block.
+
+## Initializing the system
+
+`esp_hal::init()` is the entry point for every esp-hal application. It configures the CPU clock and watchdog timers, then returns a `Peripherals` struct whose fields are the peripheral singletons.
+
+```rust
+use esp_hal::{Config, init};
+
+let peripherals = init(Config::default());
+```
+
+The `Config` struct is `#[non_exhaustive]` and cannot be constructed with a literal. Use `Config::default()` and the builder methods to customise it:
+
+```rust
+use esp_hal::{Config, clock::CpuClock};
+
+let config = Config::default().with_cpu_clock(CpuClock::max());
+let peripherals = esp_hal::init(config);
+```
+
+<Note>
+  `init()` must be called exactly once. Calling it a second time will panic with
+  `"init called more than once!"`.
+</Note>
+
+## Ownership: consuming a peripheral
+
+By default, you pass a peripheral singleton **by value** to a driver constructor. The driver takes ownership and holds the singleton for its entire lifetime. This is the simplest pattern and the right choice when the peripheral is used for the whole program.
+
+```rust
+let peripherals = esp_hal::init(esp_hal::Config::default());
+
+// I2C0 is moved into the driver — `peripherals.I2C0` can no longer be used.
+let mut i2c = I2c::new(peripherals.I2C0, /* config */);
+```
+
+Once the driver owns the peripheral, `peripherals.I2C0` is consumed and the compiler will prevent any further use of it.
+
+## Reborrowing: lending a peripheral temporarily
+
+If you want to stop a driver and recreate it later — for example to save power between transfers — you can **reborrow** the peripheral instead of moving it. Reborrowing creates a shorter-lived handle that acts like a mutable reference: only one reborrow can be active at a time, and once it is dropped the original peripheral is available again.
+
+```rust
+// `peripherals` must be `mut` to reborrow from it.
+let mut peripherals = esp_hal::init(esp_hal::Config::default());
+
+let i2c = I2c::new(peripherals.I2C0.reborrow(), /* config */);
+
+// Use the driver...
+
+// Dropping `i2c` releases the reborrow.
+drop(i2c);
+
+// Now we can reborrow I2C0 again.
+let i2c2 = I2c::new(peripherals.I2C0.reborrow(), /* config */);
+```
+
+Every peripheral singleton exposes a `.reborrow()` method that returns a new handle with a lifetime tied to the mutable borrow of the original. The compiler enforces that you cannot use the original or create a second reborrow while the first is alive.
+
+## How peripheral types are structured
+
+Each peripheral singleton is a zero-sized struct parameterised by a lifetime:
+
+```rust
+pub struct I2C0<'a> {
+    _marker: core::marker::PhantomData<&'a mut ()>,
+}
+```
+
+The `'static` variant (returned from `init()`) represents permanent ownership. A reborrow returns `I2C0<'_>`, borrowing from the mutable reference you hold.
+
+## The `Peripherals` struct
+
+All singletons are grouped in the `Peripherals` struct returned by `init()`. Its fields mirror the hardware blocks available on your chip — `GPIO0`, `I2C0`, `UART0`, `SPI2`, etc.
+
+```rust
+let peripherals = esp_hal::init(esp_hal::Config::default());
+
+// Access individual peripherals as fields:
+let _uart = peripherals.UART0;
+let _gpio = peripherals.GPIO0;
+```
+
+<Tip>
+  The exact set of peripherals in `Peripherals` depends on the chip feature you
+  compile for. Refer to the chip-specific API reference for the full list.
+</Tip>
+
+## Never use `core::mem::forget` on HAL types
+
+<Warning>
+  **Do not call `core::mem::forget` on any type defined in esp-hal.**
+
+  Many types rely on their `Drop` implementation to reset hardware state. If you
+  forget a driver without dropping it, the underlying peripheral is left in an
+  undefined state. Subsequent use of that peripheral — for example after an MCU
+  reset — can cause **undefined behaviour**.
+
+  Consider adding `#[deny(clippy::mem_forget)]` to your project to catch this
+  at compile time.
+</Warning>
+
+Drivers use `Drop` to:
+
+- Disable interrupt handlers they registered.
+- Reset peripheral registers to a known state.
+- Release DMA channel claims.
+
+Bypassing `Drop` via `core::mem::forget` skips all of this cleanup.

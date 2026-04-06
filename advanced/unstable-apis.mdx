@@ -1,0 +1,102 @@
+---
+title: "Unstable APIs"
+description: "Understand esp-hal's stability model and how to opt in to unstable APIs that may change in minor releases."
+---
+
+esp-hal distinguishes between stable and unstable APIs using a feature flag. Understanding this model helps you decide how to depend on esp-hal in firmware projects and library crates.
+
+## Stability model
+
+<CardGroup cols={2}>
+  <Card title="Stable APIs" icon="shield-check">
+    No breaking changes within a major version. Following the `1.x` line, stable APIs will not change in ways that break existing code until `2.0`.
+  </Card>
+  <Card title="Unstable APIs" icon="flask">
+    May change in **minor** releases (e.g. `1.1` → `1.2`). They are gated behind the `unstable` feature flag and are explicitly excluded from semver guarantees.
+  </Card>
+</CardGroup>
+
+## Enabling unstable APIs
+
+Add the `unstable` feature to your `esp-hal` dependency in `Cargo.toml`:
+
+```toml
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
+```
+
+Once enabled, all unstable drivers and types become available.
+
+<Warning>
+  **Library crates must never enable the `unstable` feature.** Enabling `unstable` in a library forces every downstream user to accept the instability, removes their ability to pin versions, and breaks the separation between stable and unstable surfaces. See [Library authors](#library-authors) below for the correct approach.
+</Warning>
+
+## Version pinning for unstable users
+
+Because unstable APIs can break in any minor release, firmware projects that rely on them should pin to a specific minor version using the tilde (`~`) operator:
+
+```toml
+[dependencies]
+esp-hal = { version = "~1.1", features = ["esp32c6", "unstable"] }
+```
+
+The `~1.1` requirement allows patch releases (`1.1.x`) but rejects minor bumps (`1.2.0`). This protects your firmware from unexpected breakage while still receiving bug-fix patches.
+
+## Library authors
+
+If you are writing a library crate that uses esp-hal unstable APIs internally, do **not** enable the `unstable` feature. Instead, enable the `requires-unstable` feature:
+
+```toml
+# In a library crate's Cargo.toml:
+[dependencies]
+esp-hal = { version = "1.0.0", default-features = false, features = ["requires-unstable"] }
+```
+
+`requires-unstable` signals that your library depends on unstable internals without actually enabling them. The application that pulls in your library is responsible for enabling `unstable` in its own `Cargo.toml`. This keeps the decision — and the version-pinning responsibility — with the end application author.
+
+<Info>
+  For local development of a library that uses unstable APIs, you can add esp-hal as a dev-dependency with both the chip feature and `unstable` enabled:
+
+  ```toml
+  [dev-dependencies]
+  esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
+  ```
+
+  This lets you run tests and examples locally without leaking the `unstable` feature to downstream consumers of your library.
+</Info>
+
+## What is currently unstable
+
+The following APIs are gated behind `unstable`. This list reflects the state of esp-hal as of the `1.0` release and will change over time.
+
+| Area | Module / driver | Notes |
+|------|-----------------|-------|
+| DMA | `esp_hal::dma` | Buffers, channels, and most DMA-backed transfers |
+| Timers | `esp_hal::timer` | SYSTIMER, TimerGroup drivers |
+| Async / Embassy | Throughout | Async driver variants and Embassy integration |
+| ADC | `esp_hal::analog::adc` | Analog-to-digital converter |
+| DAC | `esp_hal::analog::dac` | Digital-to-analog converter (ESP32, ESP32-S2) |
+| I2S | `esp_hal::i2s` | Inter-IC Sound |
+| LEDC | `esp_hal::ledc` | LED PWM controller |
+| MCPWM | `esp_hal::mcpwm` | Motor control PWM |
+| PCNT | `esp_hal::pcnt` | Pulse counter |
+| RMT | `esp_hal::rmt` | Remote control transceiver |
+| TWAI | `esp_hal::twai` | CAN bus (TWAI) |
+| Power management | `esp_hal::rtc_cntl::sleep` | Light sleep, deep sleep, wakeup sources |
+| PSRAM | `esp_hal::psram` | `PsramSize` and related types |
+| AES | `esp_hal::aes` | Hardware AES encryption / decryption |
+| SHA | `esp_hal::sha` | Hardware SHA hashing |
+| RSA | `esp_hal::rsa` | Hardware RSA acceleration |
+| ECC | `esp_hal::ecc` | Elliptic curve cryptography |
+| HMAC | `esp_hal::hmac` | Hardware HMAC |
+| eFuse | `esp_hal::efuse` | Most eFuse fields and read functions |
+| RTC interrupt | `Rtc::set_interrupt_handler` | RTC interrupt configuration |
+| AES DMA | `esp_hal::aes::dma` | DMA-backed AES (`AesDma`, `AesTransfer`) |
+
+<Note>
+  Individual items are marked `#[instability::unstable]` in the source. If a type or function is accessible only when `unstable` is enabled, its documentation will note this. When in doubt, check whether your code compiles without the `unstable` feature.
+</Note>
+
+## Checking what changed
+
+Breaking changes to unstable APIs are documented in the `CHANGELOG.md` and migration guides (`MIGRATING-*.md`) in the esp-hal repository. Before upgrading a pinned minor version, review the relevant migration guide.

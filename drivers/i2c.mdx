@@ -1,0 +1,118 @@
+---
+title: "I2C"
+description: "Use the I2C master peripheral on ESP32 microcontrollers with esp-hal."
+keywords: ["i2c", "i2c master", "esp32", "esp-hal", "embedded rust", "two-wire interface"]
+---
+
+The I2C driver provides a master-mode interface for communicating with I2C slave devices. It is stable and available on all supported chips. I2C slave mode is not yet supported in esp-hal.
+
+## Creating an I2C instance
+
+<Steps>
+  <Step title="Import types">
+    ```rust
+    use esp_hal::i2c::master::{Config, I2c};
+    use esp_hal::time::Rate;
+    ```
+  </Step>
+  <Step title="Build a configuration">
+    ```rust
+    let config = Config::default()
+        .with_frequency(Rate::from_khz(400)); // 400 kHz fast mode
+    ```
+    The default frequency is 100 kHz. Use `Rate::from_khz(400)` for fast mode or `Rate::from_mhz(1)` for fast-mode plus on supported chips.
+  </Step>
+  <Step title="Initialize the driver">
+    ```rust
+    let mut i2c = I2c::new(peripherals.I2C0, config)?
+        .with_sda(peripherals.GPIO2)
+        .with_scl(peripherals.GPIO3);
+    ```
+    Both SDA and SCL pins are assigned with builder methods after construction.
+  </Step>
+</Steps>
+
+## Transactions
+
+I2C addresses are specified as `u8` (7-bit right-aligned) or `I2cAddress::SevenBit(addr)`. The address must **not** include the R/W bit.
+
+```rust
+const SENSOR_ADDR: u8 = 0x48;
+
+let register = [0x00u8]; // register address to read
+let mut data  = [0u8; 2];
+
+// Write bytes to a device
+i2c.write(SENSOR_ADDR, &register)?;
+
+// Read bytes from a device
+i2c.read(SENSOR_ADDR, &mut data)?;
+
+// Write then read in a single transaction (common for register reads)
+i2c.write_read(SENSOR_ADDR, &register, &mut data)?;
+```
+
+For more complex transaction sequences, use `transaction` with a slice of `Operation` variants:
+
+```rust
+use esp_hal::i2c::master::Operation;
+
+i2c.transaction(
+    SENSOR_ADDR,
+    &mut [
+        Operation::Write(&[0x01, 0x60]), // write config register
+        Operation::Read(&mut data),      // then read result
+    ],
+)?;
+```
+
+## Changing the configuration at runtime
+
+```rust
+let new_config = Config::default().with_frequency(Rate::from_khz(100));
+i2c.apply_config(&new_config)?;
+```
+
+## Async I2C
+
+Convert to async mode with `into_async()` and use the `_async` method variants:
+
+```rust
+let mut i2c = i2c.into_async();
+
+let register = [0x00u8];
+let mut data  = [0u8; 2];
+
+i2c.write_async(SENSOR_ADDR, &register).await?;
+i2c.read_async(SENSOR_ADDR, &mut data).await?;
+i2c.write_read_async(SENSOR_ADDR, &register, &mut data).await?;
+
+// Blocking methods still work on an async driver
+i2c.write(SENSOR_ADDR, &register)?;
+```
+
+Call `i2c.into_blocking()` to switch back to blocking mode.
+
+## Error types
+
+`I2c::write`, `read`, `write_read`, and `transaction` all return `Result<(), Error>`. The `Error` type covers:
+
+| Variant | Cause |
+|---------|-------|
+| `AckCheckFailed` | Slave did not acknowledge its address or a data byte |
+| `Timeout` | SCL was held low too long (bus lockup or missing pull-up) |
+| `ArbitrationLost` | Another master won bus arbitration |
+| `ExceedingFifo` | Transfer length exceeded the internal FIFO (use chunked transfers) |
+| `AddressInvalid` | Address out of the valid 7-bit range (0x00–0x7F) |
+
+## embedded-hal compatibility
+
+`I2c` implements `embedded_hal::i2c::I2c` and `embedded_hal_async::i2c::I2c`, so you can use it with any device driver that targets those traits.
+
+## I2C slave
+
+I2C slave mode is not currently supported by esp-hal. Use ESP-IDF if you require slave mode functionality.
+
+## Chip availability
+
+I2C master is stable and available on all supported chips. All chips have at least one I2C peripheral (`I2C0`); ESP32 and ESP32-S3 also have `I2C1`.

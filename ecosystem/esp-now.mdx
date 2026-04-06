@@ -1,0 +1,226 @@
+---
+title: "ESP-NOW"
+description: "Espressif's low-latency, connectionless peer-to-peer wireless protocol for IoT sensor networks and device communication."
+---
+
+ESP-NOW is a proprietary wireless protocol from Espressif designed for low-latency, low-power device-to-device communication. Unlike Wi-Fi, it does not require a router or access point — devices communicate directly using MAC addresses, making it ideal for IoT sensor networks, remote controls, and multi-device pairing.
+
+<CardGroup cols={2}>
+  <Card title="No router needed" icon="wifi-slash">
+    Devices communicate directly peer-to-peer. No access point or DHCP setup required.
+  </Card>
+  <Card title="Up to 250 bytes per packet" icon="box">
+    Each ESP-NOW frame carries a payload of up to 250 bytes.
+  </Card>
+  <Card title="Low latency" icon="bolt">
+    Typically sub-millisecond transmission latency, much faster than TCP/IP.
+  </Card>
+  <Card title="Up to 20 peers" icon="devices">
+    Each device can register up to 20 paired peers for unicast communication.
+  </Card>
+</CardGroup>
+
+## When to use ESP-NOW
+
+ESP-NOW is a good fit when you need:
+- Simple sensor-to-hub communication without routing infrastructure
+- Remote control of devices with minimal latency
+- Broadcast messaging to multiple devices simultaneously
+- Communication between ESP32 chips where Wi-Fi overhead is too high
+
+If you need internet connectivity or TCP/IP, use Wi-Fi instead.
+
+## Chip support
+
+ESP-NOW is supported on: ESP32, ESP32-C2, ESP32-C3, ESP32-C5, ESP32-C6, ESP32-C61, ESP32-S2, ESP32-S3. It is not available on ESP32-H2.
+
+## Adding to your project
+
+ESP-NOW is part of `esp-radio` and requires the `wifi` feature (even though you don't need a Wi-Fi connection):
+
+```toml
+[dependencies]
+esp-radio = { version = "0.17.0", features = [
+    "esp32c6",
+    "wifi",
+    "esp-now",
+    "unstable",
+] }
+esp-hal   = { version = "1.0", features = ["esp32c6", "unstable"] }
+esp-alloc = { version = "0.9.0", features = ["esp32c6"] }
+```
+
+<Note>
+  ESP-NOW is currently considered unstable in `esp-radio`. You must enable the `unstable` feature and also enable `esp-hal/unstable`.
+</Note>
+
+## Basic usage
+
+<Steps>
+  <Step title="Initialize the heap and radio">
+    ```rust
+    use esp_alloc as _;
+    use esp_backtrace as _;
+    use esp_println::println;
+    use esp_radio::esp_now::{BROADCAST_ADDRESS, PeerInfo};
+
+    #[esp_rtos::main]
+    async fn main(_spawner: Spawner) -> ! {
+        let peripherals = esp_hal::init(esp_hal::Config::default());
+
+        esp_alloc::heap_allocator!(size: 72 * 1024);
+
+        // Start the RTOS scheduler
+        let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
+        let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(
+            peripherals.SW_INTERRUPT,
+        );
+        esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+
+        // Initialize Wi-Fi (required for ESP-NOW even without a network connection)
+        let (_controller, interfaces) =
+            esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+
+        let mut esp_now = interfaces.esp_now;
+        esp_now.set_channel(11).unwrap();
+
+        println!("ESP-NOW version: {}", esp_now.version().unwrap());
+        // ...
+    }
+    ```
+  </Step>
+
+  <Step title="Send a broadcast">
+    Broadcast to all nearby ESP-NOW devices (no pre-registration needed):
+
+    ```rust
+    use esp_radio::esp_now::BROADCAST_ADDRESS;
+
+    let status = esp_now.send_async(&BROADCAST_ADDRESS, b"Hello everyone").await;
+    println!("Broadcast status: {:?}", status);
+    ```
+  </Step>
+
+  <Step title="Receive messages">
+    ```rust
+    let received = esp_now.receive_async().await;
+    println!("From {:?}: {:?}", received.info.src_address, received.data());
+    ```
+  </Step>
+
+  <Step title="Add a peer for unicast">
+    To send directly to a specific device, register it as a peer using its MAC address:
+
+    ```rust
+    use esp_radio::esp_now::{PeerInfo, EspNowWifiInterface};
+
+    let peer_mac = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+
+    if !esp_now.peer_exists(&peer_mac) {
+        esp_now.add_peer(PeerInfo {
+            interface: EspNowWifiInterface::Station,
+            peer_address: peer_mac,
+            lmk: None,
+            channel: None,
+            encrypt: false,
+        }).unwrap();
+    }
+
+    let status = esp_now.send_async(&peer_mac, b"Hello, peer!").await;
+    println!("Unicast status: {:?}", status);
+    ```
+  </Step>
+</Steps>
+
+## Broadcast vs unicast
+
+| Mode      | Address                    | Peer registration | Use case                            |
+|-----------|----------------------------|-------------------|-------------------------------------|
+| Broadcast | `BROADCAST_ADDRESS`        | Not required      | Discovery, one-to-many messaging    |
+| Unicast   | Specific MAC address       | Required          | Direct device-to-device messaging   |
+
+The `BROADCAST_ADDRESS` is `[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]`.
+
+## Splitting into sender and receiver
+
+For concurrent send and receive in separate embassy tasks, split the ESP-NOW instance:
+
+```rust
+use esp_radio::esp_now::{EspNowManager, EspNowSender, EspNowReceiver};
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
+
+let (manager, sender, receiver) = esp_now.split();
+
+// Place in static storage so tasks can access them
+let manager = mk_static!(EspNowManager<'static>, manager);
+let sender = mk_static!(
+    Mutex::<NoopRawMutex, EspNowSender<'static>>,
+    Mutex::<NoopRawMutex, _>::new(sender)
+);
+
+spawner.spawn(rx_task(manager, receiver)).unwrap();
+spawner.spawn(tx_task(sender)).unwrap();
+```
+
+```rust
+#[embassy_executor::task]
+async fn rx_task(
+    manager: &'static EspNowManager<'static>,
+    mut receiver: EspNowReceiver<'static>,
+) {
+    loop {
+        let msg = receiver.receive_async().await;
+        println!("Received: {:?}", msg.data());
+
+        // Auto-register new peers seen via broadcast
+        if msg.info.dst_address == BROADCAST_ADDRESS {
+            if !manager.peer_exists(&msg.info.src_address) {
+                manager.add_peer(PeerInfo {
+                    interface: EspNowWifiInterface::Station,
+                    peer_address: msg.info.src_address,
+                    lmk: None,
+                    channel: None,
+                    encrypt: false,
+                }).unwrap();
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn tx_task(sender: &'static Mutex<NoopRawMutex, EspNowSender<'static>>) {
+    let mut ticker = embassy_time::Ticker::every(embassy_time::Duration::from_secs(1));
+    loop {
+        ticker.next().await;
+        let mut sender = sender.lock().await;
+        sender.send_async(&BROADCAST_ADDRESS, b"ping").await.ok();
+    }
+}
+```
+
+## Addressing
+
+ESP-NOW uses standard IEEE 802.11 MAC addresses (6 bytes) to identify devices. You can read your device's MAC address using `esp-hal`:
+
+```rust
+let mac = esp_hal::efuse::Efuse::mac_address();
+println!("My MAC: {:02x?}", mac);
+```
+
+Share this address out-of-band (hardcode it, use a pairing protocol, etc.) to set up unicast peers.
+
+## Encryption
+
+ESP-NOW supports link-layer encryption using a per-peer Local Master Key (LMK). Set the `lmk` field of `PeerInfo` to enable it:
+
+```rust
+esp_now.add_peer(PeerInfo {
+    interface: EspNowWifiInterface::Station,
+    peer_address: peer_mac,
+    lmk: Some([0u8; 16]),  // 16-byte key, shared between both devices
+    channel: None,
+    encrypt: true,
+}).unwrap();
+```
+
+Both devices must use the same LMK for the link to work.

@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "esp-hal",
+  "projectType": "sdk-library",
+  "projectName": "esp-hal",
+  "projectDescription": "A bare-metal (no_std) Hardware Abstraction Layer for Espressif ESP32 microcontrollers, providing safe idiomatic Rust APIs for hardware peripherals.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#343434",
-    "light": "#e8342c",
-    "dark": "#343434"
-  },
-  "favicon": "https://media.brand.dev/2c1aa05f-35f0-4a94-b388-066e534bc554.png",
-  "logo": {
-    "light": "https://media.brand.dev/e0e37b72-85a4-4af8-9990-f9b878184884.svg",
-    "dark": "https://media.brand.dev/e0e37b72-85a4-4af8-9990-f9b878184884.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/esp-rs/esp-hal"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/esp-rs/esp-hal"
-    }
-  },
+  "primaryColor": "#343434",
+  "lightColor": "#e8342c",
+  "darkColor": null,
   "navigation": {
     "tabs": [
       {
@@ -100,5 +83,40 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Bare-metal no_std HAL for all Espressif ESP32 chip families (ESP32, C, H, S series)",
+    "Blocking and async peripheral driver APIs via embedded-hal traits",
+    "Peripheral singleton ownership model preventing hardware conflicts",
+    "DMA support for high-throughput data transfers",
+    "Support for both RISC-V (ESP32-C/H series) and Xtensa (ESP32/S series) architectures",
+    "Stable and unstable API tiers with clear semver guarantees",
+    "embassy-based async runtime integration",
+    "Comprehensive peripheral coverage: GPIO, SPI, I2C, UART, RMT, I2S, LEDC, timers, crypto accelerators, and more"
+  ],
+  "publicApiSurface": [
+    "esp_hal::init(Config) -> Peripherals",
+    "esp_hal::gpio::{Input, Output, Flex, OutputOpenDrain}",
+    "esp_hal::spi::master::Spi",
+    "esp_hal::spi::slave::Spi",
+    "esp_hal::i2c::master::I2c",
+    "esp_hal::uart::Uart",
+    "esp_hal::dma::{DmaChannel, DmaTxBuf, DmaRxBuf}",
+    "esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup}",
+    "esp_hal::rmt::{Rmt, Channel}",
+    "esp_hal::interrupt::{Priority, InterruptHandler}",
+    "esp_hal::clock::{CpuClock, ClockControl}",
+    "esp_hal::delay::Delay",
+    "esp_hal::rng::Rng",
+    "esp_hal::efuse",
+    "esp_hal::ledc::{Ledc, LowSpeed, HighSpeed}",
+    "esp_hal::i2s::{I2s, I2sWrite, I2sRead}",
+    "esp_hal::aes::Aes",
+    "esp_hal::sha::Sha",
+    "esp_hal::rsa::Rsa",
+    "esp_hal::twai::Twai",
+    "esp_hal::rtc_cntl::Rtc",
+    "esp_hal::psram",
+    "esp_hal::Config"
+  ]
 }
